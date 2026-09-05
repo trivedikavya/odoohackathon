@@ -1,0 +1,91 @@
+@import 'tailwindcss';
+
+/*
+ * Urban Furniture palette
+ *   Lilac Mist      #E6C7E6  soft backgrounds, hovers, chips
+ *   Soft Violet     #A3779D  borders, secondary text/actions
+ *   Royal Amethyst  #663399  primary brand: buttons, links, active nav
+ *   Midnight Plum   #2E1A47  headings, sidebar, body text
+ */
+@theme {
+  --color-lilac-50: #faf5fa;
+  --color-lilac-100: #f3e8f3;
+  --color-lilac-200: #e6c7e6;
+  --color-lilac-300: #d6aad4;
+  --color-lilac-400: #bd90ba;
+
+  --color-violet-soft-400: #b48fae;
+  --color-violet-soft-500: #a3779d;
+  --color-violet-soft-600: #8c6287;
+
+  --color-amethyst-400: #8b56c4;
+  --color-amethyst-500: #7a44b0;
+  --color-amethyst-600: #663399;
+  --color-amethyst-700: #55297f;
+  --color-amethyst-800: #442066;
+
+  --color-plum-600: #4a2c6f;
+  --color-plum-700: #3d2359;
+  --color-plum-800: #2e1a47;
+  --color-plum-900: #221336;
+
+  --color-brand: #663399;
+  --color-brand-foreground: #ffffff;
+  --color-ink: #2e1a47;
+  --color-muted-ink: #6b5b7b;
+
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-lilac-200);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-lilac-50);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--color-plum-800);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  /* Tabular figures everywhere money is shown, so columns line up. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background-color: var(--color-lilac-200);
+    color: var(--color-plum-800);
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-lilac-300) transparent;
+  }
+}
+
+/* Focus ring consistent with the brand colour. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-amethyst-600);
+    outline-offset: 2px;
+  }
+}

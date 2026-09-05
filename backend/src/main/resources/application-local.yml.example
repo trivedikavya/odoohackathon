@@ -1,0 +1,26 @@
+# Copy this file to `application-local.yml` (same folder) and fill in real values.
+# `application-local.yml` is gitignored and must NEVER be committed.
+
+spring:
+  datasource:
+    # Neon Postgres. Use the POOLED host and append ?sslmode=require
+    url: jdbc:postgresql://<your-neon-host>/<db>?sslmode=require
+    username: <db-user>
+    password: <db-password>
+
+app:
+  jwt:
+    # Base64-encoded 256-bit (32 byte) secret. Generate one with:
+    #   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+    secret: <base64-32-byte-secret>
+  storage:
+    endpoint: https://<your-neon-storage-endpoint>
+    region: us-east-2
+    bucket: urban-furniture-assets
+    access-key: <s3-access-key-id>
+    secret-key: <s3-secret-access-key>
+
+# Phase 2 only - AI financial summary
+ai:
+  gemini:
+    api-key: <gemini-api-key>
