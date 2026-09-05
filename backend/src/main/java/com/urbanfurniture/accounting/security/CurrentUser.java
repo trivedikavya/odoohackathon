@@ -1,26 +1,35 @@
 package com.urbanfurniture.accounting.security;
 
 import com.urbanfurniture.accounting.common.exception.ApiExceptions;
+import com.urbanfurniture.accounting.identity.AccessLevel;
+import com.urbanfurniture.accounting.identity.Book;
+import com.urbanfurniture.accounting.identity.BookRepository;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
 /**
- * Accessor for the authenticated principal.
+ * Accessor for the authenticated principal, and the single source of the
+ * book scope every query is restricted to.
  * <p>
- * Services use {@link #requireContactIdForPortalUser()} to derive the
- * row-level filter for {@link Role#CONTACT} users. The value always comes from
- * the security context - never from a request parameter - so a portal user
- * cannot widen their own scope by tampering with the payload.
+ * Both the book id and the party id come from the security context, never
+ * from a request parameter, so a user cannot widen their own scope by
+ * tampering with a payload.
  */
 @Component
+@RequiredArgsConstructor
 public class CurrentUser {
+
+    private final BookRepository bookRepository;
 
     public Optional<AppUserPrincipal> principal() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated() || !(auth.getPrincipal() instanceof AppUserPrincipal p)) {
+        if (auth == null || !auth.isAuthenticated()
+                || !(auth.getPrincipal() instanceof AppUserPrincipal p)) {
             return Optional.empty();
         }
         return Optional.of(p);
@@ -30,47 +39,61 @@ public class CurrentUser {
         return principal().orElseThrow(() -> new ApiExceptions.ForbiddenException("Not authenticated"));
     }
 
-    public String emailOrSystem() {
-        return principal().map(AppUserPrincipal::getEmail).orElse("system");
+    public String loginIdOrSystem() {
+        return principal().map(AppUserPrincipal::getLoginId).orElse("system");
     }
 
-    public boolean isPortalUser() {
-        return principal().map(p -> p.getRole() == Role.CONTACT).orElse(false);
+    public Long requirePartyId() {
+        return require().getPartyId();
     }
 
     public boolean isAdmin() {
-        return principal().map(p -> p.getRole() == Role.ADMIN).orElse(false);
+        return principal().map(p -> p.getAccessLevel() == AccessLevel.ADMIN).orElse(false);
+    }
+
+    public boolean isPortalUser() {
+        return principal().map(p -> p.getAccessLevel() == AccessLevel.USER).orElse(false);
     }
 
     /**
-     * For a CONTACT-role user, returns the contact id every query must be
-     * restricted to. Returns {@code null} for staff users, meaning "no
-     * row-level restriction".
+     * The book every query in a back-office request must be restricted to.
+     * <p>
+     * Throws rather than returning null for a user with no book. That is
+     * deliberately fail-closed: a null book id would mean "no restriction"
+     * downstream, so a routing mistake that let a customer reach a
+     * back-office service would return every book's data. Failing loudly
+     * is the safer default.
      */
-    public Long contactScopeOrNull() {
+    public Long requireBookId() {
         AppUserPrincipal p = require();
-        return p.getRole() == Role.CONTACT ? p.getContactId() : null;
+        if (p.getBookId() == null) {
+            throw new ApiExceptions.ForbiddenException(
+                    "Your account is not linked to a set of books");
+        }
+        return p.getBookId();
     }
 
-    public Long requireContactIdForPortalUser() {
-        AppUserPrincipal p = require();
-        if (p.getRole() != Role.CONTACT) {
-            throw new ApiExceptions.ForbiddenException("Not a portal user");
-        }
-        if (p.getContactId() == null) {
-            throw new ApiExceptions.ForbiddenException("Portal user is not linked to a contact");
-        }
-        return p.getContactId();
+    @Transactional(readOnly = true)
+    public Book requireBook() {
+        Long bookId = requireBookId();
+        return bookRepository.findById(bookId)
+                .orElseThrow(() -> new ApiExceptions.NotFoundException("Book", bookId));
     }
 
     /**
-     * Guard for any record that belongs to a contact. Staff users pass through;
-     * portal users must own the row.
+     * Guard for any record owned by a book. Refuses access to another
+     * book's row even if its id was guessed.
      */
-    public void assertCanAccessContact(Long ownerContactId) {
-        Long scope = contactScopeOrNull();
-        if (scope != null && !scope.equals(ownerContactId)) {
-            throw new ApiExceptions.ForbiddenException("This record belongs to another contact");
+    public void assertOwnsBook(Long bookId) {
+        if (!requireBookId().equals(bookId)) {
+            throw new ApiExceptions.ForbiddenException("This record belongs to another set of books");
+        }
+    }
+
+    /** Guard for a portal user reading a document addressed to them. */
+    public void assertIsParty(Long partyId) {
+        if (!requirePartyId().equals(partyId)) {
+            throw new ApiExceptions.ForbiddenException("This record belongs to another party");
         }
     }
 }

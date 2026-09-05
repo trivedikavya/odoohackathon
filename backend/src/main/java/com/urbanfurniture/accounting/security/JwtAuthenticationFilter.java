@@ -36,10 +36,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        String email = jwtService.extractEmail(header.substring(BEARER.length()).trim());
-        if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+        String loginId = jwtService.extractSubject(header.substring(BEARER.length()).trim());
+        if (loginId != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+                // Reloaded from the database rather than rebuilt from claims,
+                // so a revoked user or a moved book takes effect at once.
+                UserDetails userDetails = userDetailsService.loadUserByUsername(loginId);
                 if (userDetails.isEnabled()) {
                     UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                             userDetails, null, userDetails.getAuthorities());

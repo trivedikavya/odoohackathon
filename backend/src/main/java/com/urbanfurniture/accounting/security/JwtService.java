@@ -52,16 +52,23 @@ public class JwtService {
         this.key = Keys.hmacShaKeyFor(keyBytes);
     }
 
+    /**
+     * The subject is the login ID, which is what the user signs in with.
+     * <p>
+     * The book id is deliberately <em>not</em> a claim: it is resolved
+     * from the database on every request, so revoking or moving a user
+     * takes effect immediately rather than when their token expires.
+     */
     public String generateToken(AppUserPrincipal principal) {
         Instant now = Instant.now();
         return Jwts.builder()
-                .subject(principal.getEmail())
+                .subject(principal.getLoginId())
                 .issuer(issuer)
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plusMillis(expirationMs)))
                 .claims(Map.of(
                         "uid", principal.getId(),
-                        "role", principal.getRole().name(),
+                        "access", principal.getAccessLevel().name(),
                         "name", principal.getFullName()))
                 .signWith(key)
                 .compact();
@@ -71,8 +78,12 @@ public class JwtService {
         return expirationMs;
     }
 
-    /** Returns the subject (email) if the token is valid, otherwise null. */
-    public String extractEmail(String token) {
+    public long expiryMillis() {
+        return expirationMs;
+    }
+
+    /** Returns the subject (login ID) if the token is valid, otherwise null. */
+    public String extractSubject(String token) {
         try {
             Claims claims = Jwts.parser()
                     .verifyWith(key)
