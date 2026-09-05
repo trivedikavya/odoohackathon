@@ -1,6 +1,6 @@
 package com.urbanfurniture.accounting.report;
 
-import com.urbanfurniture.accounting.master.account.AccountType;
+import com.urbanfurniture.accounting.ledger.AccountType;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -11,27 +11,13 @@ public final class ReportDtos {
     private ReportDtos() {
     }
 
-    /** One account's contribution to a report section. */
-    public record ReportLine(
-            Long accountId,
-            String code,
-            String name,
-            AccountType type,
-            BigDecimal amount) {
+    public record ReportLine(Long accountId, String code, String name, AccountType type, BigDecimal amount) {
     }
 
-    public record ReportSection(
-            String title,
-            List<ReportLine> lines,
-            BigDecimal total) {
+    public record ReportSection(String title, List<ReportLine> lines, BigDecimal total) {
     }
 
-    /**
-     * Assets = Liabilities + Equity.
-     * <p>
-     * Equity includes retained earnings (income - expenses to date), which is
-     * what makes the statement balance without any stored figure anywhere.
-     */
+    /** Assets = Liabilities + Equity. The difference is published, not hidden. */
     public record BalanceSheet(
             LocalDate asOf,
             ReportSection assets,
@@ -40,23 +26,33 @@ public final class ReportDtos {
             BigDecimal retainedEarnings,
             BigDecimal totalAssets,
             BigDecimal totalLiabilitiesAndEquity,
-            /** Must be zero. Surfaced so the imbalance is visible rather than hidden. */
             BigDecimal difference,
             boolean balanced) {
     }
 
     public record ProfitAndLoss(
-            LocalDate from,
-            LocalDate to,
-            ReportSection income,
-            ReportSection expenses,
-            BigDecimal totalIncome,
-            BigDecimal totalExpenses,
-            BigDecimal netProfit) {
+            LocalDate from, LocalDate to,
+            ReportSection income, ReportSection expenses,
+            BigDecimal totalIncome, BigDecimal totalExpenses, BigDecimal netProfit) {
+    }
+
+    /** Every account's debit and credit, proving the ledger sums to zero. */
+    public record TrialBalanceRow(
+            String code, String name, AccountType type, BigDecimal debit, BigDecimal credit) {
+    }
+
+    public record TrialBalance(
+            LocalDate asOf,
+            List<TrialBalanceRow> rows,
+            BigDecimal totalDebit,
+            BigDecimal totalCredit,
+            BigDecimal difference,
+            boolean balanced) {
     }
 
     public record DashboardSummary(
             LocalDate asOf,
+            String bookName,
             BigDecimal totalSales,
             BigDecimal totalPurchases,
             BigDecimal cashBalance,
@@ -67,7 +63,99 @@ public final class ReportDtos {
             BigDecimal netProfit,
             long invoiceCount,
             long billCount,
-            long contactCount,
-            long productCount) {
+            long openDealCount,
+            long awaitingMyDecisionCount) {
+    }
+
+    // ---------------- aging ----------------
+
+    public enum AgingType {
+        /** Money owed to us: the Accounts Receivable control account. */
+        RECEIVABLE,
+        /** Money we owe: the Accounts Payable control account. */
+        PAYABLE
+    }
+
+    public record AgingDocument(
+            Long documentId, String documentNo, LocalDate documentDate, LocalDate dueDate,
+            long daysOverdue, BigDecimal amountDue, String bucket) {
+    }
+
+    public record AgingRow(
+            Long partyId, String partyName,
+            BigDecimal current, BigDecimal days1To30, BigDecimal days31To60,
+            BigDecimal days61To90, BigDecimal days90Plus, BigDecimal total,
+            List<AgingDocument> documents) {
+    }
+
+    /**
+     * Aging is necessarily derived from documents, because due dates live
+     * on invoices and never reach a journal line. The total is therefore
+     * cross-checked against the ledger's control account and the result
+     * published, rather than assumed.
+     */
+    public record AgingReport(
+            LocalDate asOf, AgingType type, List<AgingRow> rows,
+            BigDecimal current, BigDecimal days1To30, BigDecimal days31To60,
+            BigDecimal days61To90, BigDecimal days90Plus, BigDecimal total,
+            BigDecimal ledgerBalance, BigDecimal difference, boolean reconciled) {
+    }
+
+    // ---------------- counterparty reconciliation ----------------
+
+    /**
+     * One counterparty's two-sided position.
+     * <p>
+     * When both parties keep books on this platform, what we say they owe
+     * us must equal what they say they owe us. This is the check that
+     * proves the mirroring is sound; a mismatch means the two ledgers have
+     * diverged, which should be impossible.
+     */
+    public record ReconciliationRow(
+            Long partyId,
+            String partyName,
+            /** What our books say. Positive means they owe us. */
+            BigDecimal ourPosition,
+            /** What their books say about us, sign-aligned for comparison. */
+            BigDecimal theirPosition,
+            BigDecimal difference,
+            boolean matched,
+            /** False when the counterparty keeps no books, so there is nothing to compare. */
+            boolean comparable) {
+    }
+
+    public record ReconciliationReport(
+            LocalDate asOf,
+            List<ReconciliationRow> rows,
+            int comparableCount,
+            int matchedCount,
+            boolean allMatched) {
+    }
+
+    // ---------------- budgets ----------------
+
+    public record BudgetPerformance(
+            Long budgetId, String name,
+            String analyticAccountCode, String analyticAccountName,
+            LocalDate periodStart, LocalDate periodEnd, String responsible,
+            BigDecimal plannedAmount,
+            /** Aggregated from journal lines; never stored. */
+            BigDecimal actualAmount,
+            BigDecimal variance,
+            BigDecimal utilisationPercent,
+            boolean overBudget) {
+    }
+
+    public record BudgetReport(
+            LocalDate asOf, List<BudgetPerformance> budgets,
+            BigDecimal totalPlanned, BigDecimal totalActual, BigDecimal totalVariance) {
+    }
+
+    // ---------------- charts ----------------
+
+    public record TrendPoint(String period, BigDecimal income, BigDecimal expenses, BigDecimal netProfit) {
+    }
+
+    public record SalesTrend(LocalDate from, LocalDate to, List<TrendPoint> points) {
     }
 }

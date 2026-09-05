@@ -1,111 +1,147 @@
 package com.urbanfurniture.accounting.report;
 
 import com.urbanfurniture.accounting.common.Money;
+import com.urbanfurniture.accounting.identity.Book;
 import com.urbanfurniture.accounting.ledger.AccountBalanceRow;
+import com.urbanfurniture.accounting.ledger.AccountType;
 import com.urbanfurniture.accounting.ledger.JournalLineRepository;
-import com.urbanfurniture.accounting.master.account.AccountType;
-import com.urbanfurniture.accounting.master.account.SystemAccount;
-import com.urbanfurniture.accounting.master.contact.ContactRepository;
-import com.urbanfurniture.accounting.master.product.ProductRepository;
-import com.urbanfurniture.accounting.transaction.purchase.BillRepository;
-import com.urbanfurniture.accounting.transaction.sales.InvoiceRepository;
+import com.urbanfurniture.accounting.ledger.SystemAccount;
+import com.urbanfurniture.accounting.security.CurrentUser;
+import com.urbanfurniture.accounting.trade.DealRepository;
+import com.urbanfurniture.accounting.trade.DocumentType;
+import com.urbanfurniture.accounting.trade.TradeDocumentRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * All financial reporting.
+ * Balance sheet, P&amp;L, trial balance and dashboard — all aggregated
+ * from journal lines at request time, for the signed-in book only.
  * <p>
- * Every figure here is aggregated from {@code journal_line} at request time.
- * There is deliberately no summary/cache table anywhere in the system, so a
- * report can never drift out of sync with the ledger it describes.
+ * There is no summary table anywhere in the schema, so these figures
+ * cannot drift from the ledger they describe.
  */
 @Service
 @RequiredArgsConstructor
 public class FinancialReportService {
 
     private final JournalLineRepository journalLineRepository;
-    private final InvoiceRepository invoiceRepository;
-    private final BillRepository billRepository;
-    private final ContactRepository contactRepository;
-    private final ProductRepository productRepository;
+    private final TradeDocumentRepository documentRepository;
+    private final DealRepository dealRepository;
+    private final CurrentUser currentUser;
 
     @Transactional(readOnly = true)
     public ReportDtos.BalanceSheet balanceSheet(LocalDate asOf) {
+        Long bookId = currentUser.requireBookId();
         LocalDate date = asOf == null ? LocalDate.now() : asOf;
-        List<AccountBalanceRow> rows = journalLineRepository.balancesAsOf(date);
+        List<AccountBalanceRow> rows = journalLineRepository.balancesAsOf(bookId, date);
 
         ReportDtos.ReportSection assets = section("Assets", rows, AccountType.ASSET);
         ReportDtos.ReportSection liabilities = section("Liabilities", rows, AccountType.LIABILITY);
-        ReportDtos.ReportSection equityAccounts = section("Equity", rows, AccountType.EQUITY);
 
-        // Retained earnings: profit accumulated in the ledger but not yet sitting
-        // in a capital account. Without this the statement would not balance.
-        BigDecimal totalIncome = totalFor(rows, AccountType.INCOME);
-        BigDecimal totalExpenses = totalFor(rows, AccountType.EXPENSE);
-        BigDecimal retainedEarnings = Money.subtract(totalIncome, totalExpenses);
+        // Profit to date is equity the owner has earned but not yet
+        // formally transferred. Without it the statement cannot balance,
+        // and deriving it here is what avoids storing it anywhere.
+        BigDecimal retained = Money.subtract(
+                totalFor(rows, AccountType.INCOME), totalFor(rows, AccountType.EXPENSE));
 
-        List<ReportDtos.ReportLine> equityLines = new java.util.ArrayList<>(equityAccounts.lines());
-        equityLines.add(new ReportDtos.ReportLine(null, "RE", "Retained Earnings (current)",
-                AccountType.EQUITY, retainedEarnings));
-        BigDecimal totalEquity = Money.add(equityAccounts.total(), retainedEarnings);
-
-        ReportDtos.ReportSection equity = new ReportDtos.ReportSection("Equity", equityLines, totalEquity);
+        ReportDtos.ReportSection equityRaw = section("Equity", rows, AccountType.EQUITY);
+        List<ReportDtos.ReportLine> equityLines = new ArrayList<>(equityRaw.lines());
+        equityLines.add(new ReportDtos.ReportLine(
+                null, "RE", "Retained Earnings (current)", AccountType.EQUITY, retained));
+        ReportDtos.ReportSection equity = new ReportDtos.ReportSection(
+                "Equity", equityLines, Money.add(equityRaw.total(), retained));
 
         BigDecimal totalAssets = assets.total();
-        BigDecimal totalLiabEquity = Money.add(liabilities.total(), totalEquity);
+        BigDecimal totalLiabEquity = Money.add(liabilities.total(), equity.total());
         BigDecimal difference = Money.subtract(totalAssets, totalLiabEquity);
 
-        return new ReportDtos.BalanceSheet(
-                date, assets, liabilities, equity, retainedEarnings,
+        return new ReportDtos.BalanceSheet(date, assets, liabilities, equity, retained,
                 totalAssets, totalLiabEquity, difference, Money.isZero(difference));
     }
 
     @Transactional(readOnly = true)
     public ReportDtos.ProfitAndLoss profitAndLoss(LocalDate from, LocalDate to) {
+        Long bookId = currentUser.requireBookId();
         LocalDate start = from == null ? LocalDate.now().withDayOfYear(1) : from;
         LocalDate end = to == null ? LocalDate.now() : to;
 
-        List<AccountBalanceRow> rows = journalLineRepository.balancesBetween(start, end);
-
+        List<AccountBalanceRow> rows = journalLineRepository.balancesBetween(bookId, start, end);
         ReportDtos.ReportSection income = section("Income", rows, AccountType.INCOME);
         ReportDtos.ReportSection expenses = section("Expenses", rows, AccountType.EXPENSE);
-        BigDecimal netProfit = Money.subtract(income.total(), expenses.total());
 
         return new ReportDtos.ProfitAndLoss(start, end, income, expenses,
-                income.total(), expenses.total(), netProfit);
+                income.total(), expenses.total(), Money.subtract(income.total(), expenses.total()));
+    }
+
+    @Transactional(readOnly = true)
+    public ReportDtos.TrialBalance trialBalance(LocalDate asOf) {
+        Long bookId = currentUser.requireBookId();
+        LocalDate date = asOf == null ? LocalDate.now() : asOf;
+
+        List<ReportDtos.TrialBalanceRow> rows = new ArrayList<>();
+        BigDecimal totalDebit = Money.ZERO;
+        BigDecimal totalCredit = Money.ZERO;
+
+        for (AccountBalanceRow row : journalLineRepository.balancesAsOf(bookId, date)) {
+            BigDecimal signed = row.signedDebitBalance();
+            if (Money.isZero(signed)) {
+                continue;
+            }
+            // Each account appears on exactly one side, as its net position.
+            BigDecimal debit = Money.isPositive(signed) ? signed : Money.ZERO;
+            BigDecimal credit = Money.isNegative(signed) ? signed.negate() : Money.ZERO;
+
+            rows.add(new ReportDtos.TrialBalanceRow(row.code(), row.name(), row.type(), debit, credit));
+            totalDebit = Money.add(totalDebit, debit);
+            totalCredit = Money.add(totalCredit, credit);
+        }
+
+        BigDecimal difference = Money.subtract(totalDebit, totalCredit);
+        return new ReportDtos.TrialBalance(date, rows, totalDebit, totalCredit,
+                difference, Money.isZero(difference));
     }
 
     @Transactional(readOnly = true)
     public ReportDtos.DashboardSummary dashboard(LocalDate asOf) {
+        Book book = currentUser.requireBook();
+        Long bookId = book.getId();
+        Long partyId = book.getParty().getId();
         LocalDate date = asOf == null ? LocalDate.now() : asOf;
-        List<AccountBalanceRow> rows = journalLineRepository.balancesAsOf(date);
 
-        BigDecimal totalSales = totalFor(rows, AccountType.INCOME);
-        BigDecimal totalPurchases = totalFor(rows, AccountType.EXPENSE);
-        BigDecimal cash = naturalBalanceOf(SystemAccount.CASH, date);
-        BigDecimal bank = naturalBalanceOf(SystemAccount.BANK, date);
-        BigDecimal receivable = naturalBalanceOf(SystemAccount.DEBTORS, date);
-        BigDecimal payable = naturalBalanceOf(SystemAccount.CREDITORS, date);
+        // One query for every balance. Fetching each control account
+        // separately cost four more round trips to a remote database and
+        // dominated the response time of the most-visited page.
+        List<AccountBalanceRow> rows = journalLineRepository.balancesAsOf(bookId, date);
+
+        BigDecimal cash = naturalBalanceIn(rows, SystemAccount.CASH);
+        BigDecimal bank = naturalBalanceIn(rows, SystemAccount.BANK);
+        BigDecimal receivable = naturalBalanceIn(rows, SystemAccount.DEBTORS);
+        BigDecimal payable = naturalBalanceIn(rows, SystemAccount.CREDITORS);
+        BigDecimal income = totalFor(rows, AccountType.INCOME);
+        BigDecimal expenses = totalFor(rows, AccountType.EXPENSE);
+
+        long awaiting = dealRepository.inboxForParty(partyId, PageRequest.of(0, 1)).getTotalElements();
+        long openDeals = dealRepository
+                .searchForParty(partyId, com.urbanfurniture.accounting.trade.DealStatus.ACCEPTED, "",
+                        PageRequest.of(0, 1))
+                .getTotalElements();
 
         return new ReportDtos.DashboardSummary(
-                date,
-                totalSales,
-                totalPurchases,
-                cash,
-                bank,
-                Money.add(cash, bank),
-                receivable,
-                payable,
-                Money.subtract(totalSales, totalPurchases),
-                invoiceRepository.count(),
-                billRepository.count(),
-                contactRepository.count(),
-                productRepository.count());
+                date, book.getName(),
+                income, expenses,
+                cash, bank, Money.add(cash, bank),
+                receivable, payable,
+                Money.subtract(income, expenses),
+                documentRepository.countByBookIdAndDocType(bookId, DocumentType.INVOICE),
+                documentRepository.countByBookIdAndDocType(bookId, DocumentType.BILL),
+                openDeals, awaiting);
     }
 
     // ---------------- internals ----------------
@@ -113,9 +149,10 @@ public class FinancialReportService {
     private ReportDtos.ReportSection section(String title, List<AccountBalanceRow> rows, AccountType type) {
         List<ReportDtos.ReportLine> lines = rows.stream()
                 .filter(r -> r.type() == type)
+                // A zero balance is noise, not information.
                 .filter(r -> !Money.isZero(r.naturalBalance()))
-                .map(r -> new ReportDtos.ReportLine(r.accountId(), r.code(), r.name(), r.type(),
-                        r.naturalBalance()))
+                .map(r -> new ReportDtos.ReportLine(
+                        r.accountId(), r.code(), r.name(), r.type(), r.naturalBalance()))
                 .toList();
 
         BigDecimal total = lines.stream()
@@ -132,18 +169,10 @@ public class FinancialReportService {
                 .reduce(Money.ZERO, Money::add);
     }
 
-    /**
-     * Balance of a single well-known account as at {@code asOf}, expressed on
-     * its natural side so callers always get a positive number under normal
-     * conditions.
-     */
-    private BigDecimal naturalBalanceOf(SystemAccount systemAccount, LocalDate asOf) {
-        BigDecimal signedDebit = journalLineRepository.debitBalanceOf(systemAccount, asOf);
-        BigDecimal value = signedDebit == null ? Money.ZERO : signedDebit;
-        // Credit-normal accounts: flip the sign so a payable reads as positive.
-        return switch (systemAccount) {
-            case CREDITORS, TAX_PAYABLE, CAPITAL -> Money.of(value.negate());
-            default -> Money.of(value);
-        };
+    private BigDecimal naturalBalanceIn(List<AccountBalanceRow> rows, SystemAccount systemAccount) {
+        return rows.stream()
+                .filter(r -> r.systemCode() == systemAccount)
+                .map(AccountBalanceRow::naturalBalance)
+                .reduce(Money.ZERO, Money::add);
     }
 }
