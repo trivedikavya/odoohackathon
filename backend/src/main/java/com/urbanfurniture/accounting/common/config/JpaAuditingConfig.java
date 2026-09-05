@@ -24,7 +24,10 @@ public class JpaAuditingConfig {
                 return Optional.of("system");
             }
             if (auth.getPrincipal() instanceof AppUserPrincipal p) {
-                return Optional.of(p.getEmail());
+                // Login ID rather than email: it is what the user signs in
+                // with and what appears everywhere else in the audit trail,
+                // and it is stable if they change their address.
+                return Optional.of(p.getLoginId());
             }
             return Optional.of(auth.getName() == null ? "system" : auth.getName());
         };
