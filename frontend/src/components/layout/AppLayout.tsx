@@ -1,31 +1,37 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
-  BookOpen,
   Boxes,
+  Building2,
   ChevronDown,
+  ClipboardList,
+  Clock,
   FileText,
+  Handshake,
   LayoutDashboard,
   ListTree,
   LogOut,
   Menu,
-  Receipt,
+  PiggyBank,
+  Scale,
   ScrollText,
   Settings,
-  ShoppingCart,
+  ShieldCheck,
+  Target,
+  TrendingUp,
   Users,
   Wallet,
   X,
 } from 'lucide-react'
 import { useAuth } from '@/auth/AuthContext'
-import type { Role } from '@/api/types'
+import type { AccessLevel } from '@/api/types'
 import { cn } from '@/lib/utils'
 
 interface NavItem {
   to: string
   label: string
   icon: typeof LayoutDashboard
-  roles?: Role[]
+  levels?: AccessLevel[]
 }
 
 interface NavGroup {
@@ -39,6 +45,14 @@ const navigation: NavGroup[] = [
     items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard }],
   },
   {
+    label: 'Trade',
+    items: [
+      { to: '/deals', label: 'Deals & Requests', icon: Handshake },
+      { to: '/documents', label: 'Documents', icon: ClipboardList },
+      { to: '/payments', label: 'Payments', icon: Wallet },
+    ],
+  },
+  {
     label: 'Master Data',
     items: [
       { to: '/contacts', label: 'Contacts', icon: Users },
@@ -46,33 +60,36 @@ const navigation: NavGroup[] = [
     ],
   },
   {
-    label: 'Transactions',
+    label: 'Accounting',
     items: [
-      { to: '/purchases', label: 'Purchases', icon: ShoppingCart },
-      { to: '/sales', label: 'Sales', icon: Receipt },
-      { to: '/payments', label: 'Payments', icon: Wallet },
+      { to: '/ledger', label: 'General Ledger', icon: ScrollText },
+      { to: '/reports/trial-balance', label: 'Trial Balance', icon: Scale },
+      { to: '/reports/balance-sheet', label: 'Balance Sheet', icon: FileText },
+      { to: '/reports/profit-and-loss', label: 'Profit & Loss', icon: TrendingUp },
+      { to: '/reports/aging', label: 'AR / AP Aging', icon: Clock },
+      { to: '/reports/reconciliation', label: 'Reconciliation', icon: ShieldCheck },
     ],
   },
   {
-    label: 'Accounting',
+    label: 'Analytic',
     items: [
-      { to: '/ledger', label: 'Ledger', icon: ScrollText },
-      { to: '/reports/balance-sheet', label: 'Balance Sheet', icon: FileText },
-      { to: '/reports/profit-and-loss', label: 'Profit & Loss', icon: BookOpen },
+      { to: '/analytic-accounts', label: 'Projects & Centres', icon: Target },
+      { to: '/budgets', label: 'Budgets', icon: PiggyBank },
+      { to: '/reports/budget', label: 'Budget Report', icon: TrendingUp },
     ],
   },
   {
     label: 'Configuration',
     items: [
       { to: '/accounts', label: 'Chart of Accounts', icon: ListTree },
-      { to: '/journals', label: 'Journals', icon: BookOpen },
-      { to: '/users', label: 'Users', icon: Settings, roles: ['ADMIN'] },
+      { to: '/organisation', label: 'Organisation & GST', icon: Building2, levels: ['ADMIN'] },
+      { to: '/users', label: 'Users', icon: Settings, levels: ['ADMIN'] },
     ],
   },
 ]
 
 export function AppLayout() {
-  const { user, logout, hasRole } = useAuth()
+  const { user, logout, hasAccess } = useAuth()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -82,21 +99,25 @@ export function AppLayout() {
     navigate('/login', { replace: true })
   }
 
+  const initials = user?.partyName?.slice(0, 2).toUpperCase() ?? 'UF'
+
   const sidebar = (
     <nav className="scrollbar-thin flex h-full flex-col overflow-y-auto">
       <div className="flex items-center gap-2.5 px-5 py-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amethyst-600 text-sm font-bold text-white">
-          UF
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amethyst-600 text-sm font-bold text-white">
+          {initials}
         </div>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-white">Urban Furniture</p>
-          <p className="truncate text-xs text-lilac-300">Accounting</p>
+          <p className="truncate text-sm font-semibold text-white">{user?.partyName}</p>
+          {/* The party type matters: a Vendor's app looks the same but its
+              books are entirely its own. */}
+          <p className="truncate text-xs text-lilac-300">{user?.partyType} · Accounting</p>
         </div>
       </div>
 
       <div className="flex-1 space-y-5 px-3 pb-4">
         {navigation.map((group) => {
-          const items = group.items.filter((i) => !i.roles || hasRole(...i.roles))
+          const items = group.items.filter((i) => !i.levels || hasAccess(...i.levels))
           if (items.length === 0) return null
           return (
             <div key={group.label}>
@@ -133,12 +154,8 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen bg-lilac-50">
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 bg-plum-800 lg:block">
-        {sidebar}
-      </aside>
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 bg-plum-800 lg:block">{sidebar}</aside>
 
-      {/* Mobile sidebar */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div className="fixed inset-0 bg-plum-900/50" onClick={() => setMobileOpen(false)} />
@@ -165,7 +182,7 @@ export function AppLayout() {
             <Menu className="h-5 w-5" />
           </button>
 
-          <div className="ml-auto relative">
+          <div className="relative ml-auto">
             <button
               onClick={() => setMenuOpen((v) => !v)}
               className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-lilac-100"
@@ -175,7 +192,7 @@ export function AppLayout() {
               </div>
               <div className="hidden text-left sm:block">
                 <p className="text-xs font-medium text-plum-800">{user?.fullName}</p>
-                <p className="text-[10px] text-muted-ink">{user?.role}</p>
+                <p className="text-[10px] text-muted-ink">{user?.accessLevel}</p>
               </div>
               <ChevronDown className="h-3.5 w-3.5 text-muted-ink" />
             </button>
@@ -183,10 +200,12 @@ export function AppLayout() {
             {menuOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-                <div className="absolute right-0 z-20 mt-1 w-52 rounded-lg border border-lilac-200 bg-white py-1 shadow-lg">
+                <div className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-lilac-200 bg-white py-1 shadow-lg">
                   <div className="border-b border-lilac-100 px-3 py-2">
                     <p className="truncate text-sm font-medium text-plum-800">{user?.fullName}</p>
-                    <p className="truncate text-xs text-muted-ink">{user?.email}</p>
+                    <p className="truncate text-xs text-muted-ink">
+                      {user?.loginId} · {user?.email}
+                    </p>
                   </div>
                   <button
                     onClick={handleLogout}

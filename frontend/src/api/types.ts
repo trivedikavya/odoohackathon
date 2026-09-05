@@ -1,15 +1,34 @@
 /** Shared API types, mirroring the backend DTOs. */
 
-export type Role = 'ADMIN' | 'ACCOUNTANT' | 'CONTACT'
-export type ContactType = 'CUSTOMER' | 'VENDOR' | 'BOTH'
-export type ProductType = 'GOODS' | 'SERVICE' | 'COMBO'
+/** What a party IS in a trade. */
+export type PartyType = 'SELLER' | 'VENDOR' | 'CUSTOMER'
+
+/** What a user may DO inside their own party's book. */
+export type AccessLevel = 'ADMIN' | 'ACCOUNTANT' | 'USER'
+
 export type AccountType = 'ASSET' | 'LIABILITY' | 'EQUITY' | 'INCOME' | 'EXPENSE'
-export type JournalType = 'SALES' | 'PURCHASE' | 'CASH' | 'BANK'
-export type OrderStatus = 'DRAFT' | 'CONFIRMED' | 'INVOICED' | 'BILLED' | 'CANCELLED'
-export type DocumentStatus = 'DRAFT' | 'POSTED' | 'PARTIALLY_PAID' | 'PAID' | 'CANCELLED'
+export type JournalType = 'SALES' | 'PURCHASE' | 'CASH' | 'BANK' | 'GENERAL'
+export type ProductType = 'GOODS' | 'SERVICE'
+export type SourceType = 'INVOICE' | 'BILL' | 'PAYMENT' | 'OPENING' | 'MANUAL'
+export type TaxTreatment = 'INTRA_STATE' | 'INTER_STATE' | 'UNSPECIFIED'
+export type AnalyticAccountType = 'PROJECT' | 'DEPARTMENT' | 'COST_CENTER'
+export type AgingType = 'RECEIVABLE' | 'PAYABLE'
 export type PaymentMethod = 'CASH' | 'BANK'
-export type PaymentDirection = 'RECEIVE' | 'PAY'
-export type SourceType = 'INVOICE' | 'BILL' | 'PAYMENT' | 'MANUAL'
+export type PaymentDirection = 'IN' | 'OUT'
+
+export type DealStatus =
+  | 'RFQ_DRAFT'
+  | 'RFQ_SENT'
+  | 'REJECTED'
+  | 'ACCEPTED'
+  | 'DELIVERED'
+  | 'INVOICED'
+  | 'PARTIALLY_PAID'
+  | 'PAID'
+  | 'CANCELLED'
+
+export type DocumentKind = 'SALES_ORDER' | 'PURCHASE_ORDER' | 'INVOICE' | 'BILL'
+export type DocumentStatus = 'OPEN' | 'POSTED' | 'PARTIALLY_PAID' | 'PAID' | 'CANCELLED'
 
 export interface PageResponse<T> {
   content: T[]
@@ -20,12 +39,19 @@ export interface PageResponse<T> {
   last: boolean
 }
 
+/** Identity */
+
 export interface UserProfile {
   id: number
+  loginId: string
   email: string
   fullName: string
-  role: Role
-  contactId: number | null
+  accessLevel: AccessLevel
+  partyId: number
+  partyType: PartyType
+  partyName: string
+  /** Null for customers — they keep no books. */
+  bookId: number | null
 }
 
 export interface LoginResponse {
@@ -34,34 +60,59 @@ export interface LoginResponse {
   user: UserProfile
 }
 
+export interface AvailabilityResponse {
+  available: boolean
+  message: string
+}
+
+export interface RegisterRequest {
+  loginId: string
+  email: string
+  password: string
+  fullName: string
+  partyType: PartyType
+  organisationName?: string
+  gstin?: string
+  addressLine?: string
+  city?: string
+  state?: string
+  pincode?: string
+  phone?: string
+}
+
 export interface AppUser {
   id: number
+  loginId: string
   email: string
   fullName: string
-  role: Role
-  contactId: number | null
+  accessLevel: AccessLevel
   active: boolean
+}
+
+/** Master data */
+
+export interface PartyOption {
+  id: number
+  name: string
+  type: PartyType
+  city?: string | null
+  state?: string | null
+  keepsBooks: boolean
 }
 
 export interface Contact {
   id: number
+  partyId: number
   name: string
-  type: ContactType
+  type: PartyType
   email?: string | null
-  mobile?: string | null
-  addressLine?: string | null
+  phone?: string | null
+  gstin?: string | null
   city?: string | null
   state?: string | null
-  pincode?: string | null
-  gstin?: string | null
-  profileImageUrl?: string | null
+  creditDays: number
   active: boolean
-}
-
-export interface ContactOption {
-  id: number
-  name: string
-  type: ContactType
+  keepsBooks: boolean
 }
 
 export interface Product {
@@ -70,19 +121,10 @@ export interface Product {
   type: ProductType
   salesPrice: string
   cost: string
-  category?: string | null
   hsnCode?: string | null
   taxRate: string
+  category?: string | null
   active: boolean
-}
-
-export interface ProductOption {
-  id: number
-  name: string
-  type: ProductType
-  salesPrice: string
-  cost: string
-  taxRate: string
 }
 
 export interface Account {
@@ -100,81 +142,168 @@ export interface Journal {
   code: string
   name: string
   type: JournalType
-  defaultAccountId?: number | null
-  defaultAccountName?: string | null
   active: boolean
 }
 
-export interface LineResponse {
+export interface Organisation {
+  partyId: number
+  bookId: number
+  name: string
+  type: PartyType
+  email?: string | null
+  phone?: string | null
+  gstin?: string | null
+  addressLine?: string | null
+  city?: string | null
+  state?: string | null
+  pincode?: string | null
+}
+
+/** Trade */
+
+export interface DealLine {
   id: number
   lineNo: number
-  productId: number
-  productName: string
+  description: string
+  hsnCode?: string | null
   quantity: string
   unitPrice: string
   taxRate: string
   untaxedAmount: string
   taxAmount: string
+  cgstAmount: string
+  sgstAmount: string
+  igstAmount: string
   lineTotal: string
 }
 
-export interface OrderResponse {
+export interface DocumentSummary {
   id: number
-  orderNo: string
-  contactId: number
-  contactName: string
-  orderDate: string
-  status: OrderStatus
+  docType: DocumentKind
+  docNo: string
+  status: DocumentStatus
+  totalAmount: string
+  amountDue: string
+}
+
+export interface Deal {
+  id: number
+  dealNo: string
+  buyerPartyId: number
+  buyerName: string
+  buyerType: PartyType
+  sellerPartyId: number
+  sellerName: string
+  sellerType: PartyType
+  initiatedByPartyId: number
+  status: DealStatus
+  dealDate: string
+  expectedDelivery?: string | null
+  deliveredAt?: string | null
+  placeOfSupply?: string | null
+  taxTreatment: TaxTreatment
   untaxedAmount: string
   taxAmount: string
   totalAmount: string
   notes?: string | null
-  lines: LineResponse[]
-  generatedDocumentId?: number | null
-  generatedDocumentNo?: string | null
+  rejectReason?: string | null
+  lines: DealLine[]
+  /** True when the caller is the one who must accept or reject. */
+  awaitingMyDecision: boolean
+  /** True when the caller is the supplying side. */
+  iAmSeller: boolean
+  /** True when both sides keep books, so the deal mirrors. */
+  mirrored: boolean
+  myDocuments: DocumentSummary[]
 }
 
-export interface DocumentResponse {
+export interface DocumentLine {
   id: number
-  documentNo: string
-  contactId: number
-  contactName: string
-  documentDate: string
-  dueDate?: string | null
-  status: DocumentStatus
+  lineNo: number
+  description: string
+  hsnCode?: string | null
+  quantity: string
+  unitPrice: string
+  taxRate: string
   untaxedAmount: string
   taxAmount: string
+  cgstAmount: string
+  sgstAmount: string
+  igstAmount: string
+  lineTotal: string
+  analyticAccountId?: number | null
+  analyticAccountName?: string | null
+}
+
+export interface TradeDocument {
+  id: number
+  dealId: number
+  dealNo: string
+  docType: DocumentKind
+  docNo: string
+  docDate: string
+  dueDate?: string | null
+  status: DocumentStatus
+  counterpartyPartyId?: number | null
+  counterpartyName?: string | null
+  placeOfSupply?: string | null
+  taxTreatment: TaxTreatment
+  untaxedAmount: string
+  taxAmount: string
+  cgstAmount: string
+  sgstAmount: string
+  igstAmount: string
   totalAmount: string
-  amountPaid: string
+  amountSettled: string
   amountDue: string
   journalEntryId?: number | null
   journalEntryNo?: string | null
-  sourceOrderId?: number | null
-  sourceOrderNo?: string | null
-  notes?: string | null
-  lines: LineResponse[]
+  lines: DocumentLine[]
 }
 
-export interface PaymentResponse {
+export interface Payment {
   id: number
   paymentNo: string
-  contactId: number
-  contactName: string
+  documentId: number
+  documentNo: string
+  documentType: DocumentKind
+  counterpartyPartyId?: number | null
+  counterpartyName?: string | null
   direction: PaymentDirection
   method: PaymentMethod
   paymentDate: string
   amount: string
-  invoiceId?: number | null
-  invoiceNo?: string | null
-  billId?: number | null
-  billNo?: string | null
+  reference?: string | null
   journalEntryId?: number | null
   journalEntryNo?: string | null
-  reference?: string | null
-  reconciled: boolean
 }
 
-export interface JournalLineResponse {
+export interface DealLineRequest {
+  description: string
+  hsnCode?: string
+  quantity: string
+  unitPrice: string
+  taxRate?: string
+}
+
+export interface CreateDealRequest {
+  sellerPartyId: number
+  dealDate: string
+  expectedDelivery?: string
+  notes?: string
+  lines: DealLineRequest[]
+}
+
+export interface SettlementRequest {
+  method: PaymentMethod
+  settlementDate: string
+  amount: string
+  reference?: string
+}
+
+/** Ledger */
+
+export interface JournalLine {
   id: number
   lineNo: number
   accountId: number
@@ -182,12 +311,13 @@ export interface JournalLineResponse {
   accountName: string
   contactId?: number | null
   contactName?: string | null
+  analyticAccountCode?: string | null
   label?: string | null
   debit: string
   credit: string
 }
 
-export interface JournalEntryResponse {
+export interface JournalEntry {
   id: number
   entryNo: string
   journalCode: string
@@ -200,8 +330,10 @@ export interface JournalEntryResponse {
   totalCredit: string
   balanced: boolean
   createdBy?: string | null
-  lines: JournalLineResponse[]
+  lines: JournalLine[]
 }
+
+/** Reports */
 
 export interface ReportLine {
   accountId: number | null
@@ -239,8 +371,26 @@ export interface ProfitAndLoss {
   netProfit: string
 }
 
+export interface TrialBalanceRow {
+  code: string
+  name: string
+  type: AccountType
+  debit: string
+  credit: string
+}
+
+export interface TrialBalance {
+  asOf: string
+  rows: TrialBalanceRow[]
+  totalDebit: string
+  totalCredit: string
+  difference: string
+  balanced: boolean
+}
+
 export interface DashboardSummary {
   asOf: string
+  bookName: string
   totalSales: string
   totalPurchases: string
   cashBalance: string
@@ -251,29 +401,134 @@ export interface DashboardSummary {
   netProfit: string
   invoiceCount: number
   billCount: number
-  contactCount: number
-  productCount: number
+  openDealCount: number
+  awaitingMyDecisionCount: number
 }
 
-/** Request payloads */
-
-export interface LineRequest {
-  productId: number
-  quantity: string
-  unitPrice: string
-  taxRate?: string
+export interface AgingDocument {
+  documentId: number
+  documentNo: string
+  documentDate: string
+  dueDate?: string | null
+  daysOverdue: number
+  amountDue: string
+  bucket: string
 }
 
-export interface OrderRequest {
-  contactId: number
-  orderDate: string
-  notes?: string
-  lines: LineRequest[]
+export interface AgingRow {
+  partyId: number
+  partyName: string
+  current: string
+  days1To30: string
+  days31To60: string
+  days61To90: string
+  days90Plus: string
+  total: string
+  documents: AgingDocument[]
 }
 
-export interface PaymentRequest {
-  method: PaymentMethod
-  paymentDate: string
-  amount: string
-  reference?: string
+export interface AgingReport {
+  asOf: string
+  type: AgingType
+  rows: AgingRow[]
+  current: string
+  days1To30: string
+  days31To60: string
+  days61To90: string
+  days90Plus: string
+  total: string
+  ledgerBalance: string
+  difference: string
+  reconciled: boolean
+}
+
+export interface ReconciliationRow {
+  partyId: number
+  partyName: string
+  ourPosition: string
+  theirPosition: string | null
+  difference: string | null
+  matched: boolean
+  comparable: boolean
+}
+
+export interface ReconciliationReport {
+  asOf: string
+  rows: ReconciliationRow[]
+  comparableCount: number
+  matchedCount: number
+  allMatched: boolean
+}
+
+export interface TrendPoint {
+  period: string
+  income: string
+  expenses: string
+  netProfit: string
+}
+
+export interface SalesTrend {
+  from: string
+  to: string
+  points: TrendPoint[]
+}
+
+/** Analytic */
+
+export interface AnalyticAccount {
+  id: number
+  code: string
+  name: string
+  type: AnalyticAccountType
+  notes?: string | null
+  active: boolean
+}
+
+export interface Budget {
+  id: number
+  name: string
+  analyticAccountId: number
+  analyticAccountCode: string
+  analyticAccountName: string
+  periodStart: string
+  periodEnd: string
+  plannedAmount: string
+  responsible?: string | null
+  notes?: string | null
+  active: boolean
+}
+
+export interface BudgetPerformance {
+  budgetId: number
+  name: string
+  analyticAccountCode: string
+  analyticAccountName: string
+  periodStart: string
+  periodEnd: string
+  responsible?: string | null
+  plannedAmount: string
+  actualAmount: string
+  variance: string
+  utilisationPercent?: string | null
+  overBudget: boolean
+}
+
+export interface BudgetReport {
+  asOf: string
+  budgets: BudgetPerformance[]
+  totalPlanned: string
+  totalActual: string
+  totalVariance: string
+}
+
+/** Portal */
+
+export interface PortalSummary {
+  partyId: number
+  partyName: string
+  totalBilled: string
+  totalPaid: string
+  outstanding: string
+  openCount: number
+  overdueCount: number
 }

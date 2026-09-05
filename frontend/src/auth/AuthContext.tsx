@@ -1,13 +1,17 @@
 import { createContext, useContext } from 'react'
-import type { Role, UserProfile } from '@/api/types'
+import type { AccessLevel, UserProfile } from '@/api/types'
 
 export interface AuthContextValue {
   user: UserProfile | null
   loading: boolean
-  login: (email: string, password: string) => Promise<void>
+  /** Resolves with the profile so callers can route on role immediately. */
+  login: (identifier: string, password: string) => Promise<UserProfile>
+  register: (body: import('@/api/types').RegisterRequest) => Promise<UserProfile>
   logout: () => void
-  hasRole: (...roles: Role[]) => boolean
+  hasAccess: (...levels: AccessLevel[]) => boolean
   isAdmin: boolean
+  /** True for staff of a seller or vendor; false for customers. */
+  keepsBooks: boolean
 }
 
 export const AuthContext = createContext<AuthContextValue | undefined>(undefined)
