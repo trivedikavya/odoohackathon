@@ -1,22 +1,24 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Lock, Plus } from 'lucide-react'
+import { PageHeader } from '@/components/layout/AppLayout'
+import { Card, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { FormRow, Input, Select } from '@/components/ui/Field'
+import { Badge } from '@/components/ui/Badge'
+import { Modal } from '@/components/ui/Modal'
+import { EmptyRow, TD, TH, THead, TR, Table } from '@/components/ui/Table'
+import { ErrorState, PageLoader } from '@/components/ui/PageLoader'
+import { useToast } from '@/components/ui/Toast'
+import { masterApi } from '@/api/endpoints'
 import { errorMessage } from '@/api/client'
-import { accountsApi } from '@/api/endpoints'
 import type { AccountType } from '@/api/types'
 import { useAuth } from '@/auth/AuthContext'
-import { PageHeader } from '@/components/layout/AppLayout'
-import { Badge } from '@/components/ui/Badge'
-import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
-import { FormRow, Input, Select } from '@/components/ui/Field'
-import { Modal } from '@/components/ui/Modal'
-import { ErrorState, PageLoader } from '@/components/ui/PageLoader'
-import { EmptyRow, Table, TD, TH, THead, TR } from '@/components/ui/Table'
-import { useToast } from '@/components/ui/Toast'
 import { titleCase } from '@/lib/utils'
 
-const typeTone: Record<AccountType, 'brand' | 'warning' | 'info' | 'success' | 'danger'> = {
+const ACCOUNT_TYPES: AccountType[] = ['ASSET', 'LIABILITY', 'EQUITY', 'INCOME', 'EXPENSE']
+
+const typeTones: Record<AccountType, 'brand' | 'warning' | 'info' | 'success' | 'danger'> = {
   ASSET: 'brand',
   LIABILITY: 'warning',
   EQUITY: 'info',
@@ -24,145 +26,228 @@ const typeTone: Record<AccountType, 'brand' | 'warning' | 'info' | 'success' | '
   EXPENSE: 'danger',
 }
 
+interface FormState {
+  code: string
+  name: string
+  type: AccountType
+}
+
+const EMPTY_FORM: FormState = { code: '', name: '', type: 'ASSET' }
+
 export function AccountsPage() {
-  const qc = useQueryClient()
-  const toast = useToast()
   const { isAdmin } = useAuth()
+  const toast = useToast()
+  const queryClient = useQueryClient()
 
+  const [includeArchived, setIncludeArchived] = useState(false)
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ code: '', name: '', type: 'ASSET' as AccountType })
+  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({})
 
-  const { data: accounts = [], isLoading, isError, error } = useQuery({
-    queryKey: ['accounts'],
-    queryFn: () => accountsApi.list(true),
+  const query = useQuery({
+    queryKey: ['accounts', includeArchived],
+    queryFn: () => masterApi.accounts(includeArchived),
   })
+
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['accounts'] })
 
   const create = useMutation({
-    mutationFn: () => accountsApi.create(form),
-    onSuccess: (a) => {
-      qc.invalidateQueries({ queryKey: ['accounts'] })
+    mutationFn: () => masterApi.createAccount({ ...form }),
+    onSuccess: () => {
+      toast.success('Account created')
       setOpen(false)
-      setForm({ code: '', name: '', type: 'ASSET' })
-      toast.success(`Account ${a.code} created`)
+      setForm(EMPTY_FORM)
+      invalidate()
     },
-    onError: (e) => toast.error(errorMessage(e)),
+    onError: (error) => toast.error(errorMessage(error)),
   })
 
+  const archive = useMutation({
+    mutationFn: (id: number) => masterApi.archiveAccount(id),
+    onSuccess: () => {
+      toast.success('Account archived')
+      invalidate()
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  })
+
+  const submit = () => {
+    const next: Partial<Record<keyof FormState, string>> = {}
+    if (!form.code.trim()) next.code = 'A code is required'
+    if (!form.name.trim()) next.name = 'A name is required'
+    setErrors(next)
+    if (Object.keys(next).length > 0) return
+    create.mutate()
+  }
+
+  const accounts = query.data ?? []
+
   return (
-    <>
+    <div>
       <PageHeader
-        title="Chart of Accounts"
-        description="The account structure every journal entry posts against. System accounts are locked because the posting rules depend on them."
+        title="Chart of accounts"
+        description="The financial accounts your book posts into."
         action={
-          isAdmin ? (
-            <Button onClick={() => setOpen(true)}>
-              <Plus className="h-4 w-4" />
-              New account
-            </Button>
-          ) : undefined
+          <div className="flex items-end gap-3">
+            <label className="flex items-center gap-2 text-sm text-plum-800">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-lilac-300 accent-amethyst-600"
+                checked={includeArchived}
+                onChange={(e) => setIncludeArchived(e.target.checked)}
+              />
+              Show archived
+            </label>
+            {isAdmin && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setForm(EMPTY_FORM)
+                  setErrors({})
+                  setOpen(true)
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                Add account
+              </Button>
+            )}
+          </div>
         }
       />
 
-      <Card>
-        {isLoading ? (
-          <PageLoader />
-        ) : isError ? (
-          <ErrorState message={errorMessage(error)} />
-        ) : (
+      <Card className="mb-4">
+        <CardBody className="py-3">
+          <p className="text-xs text-muted-ink">
+            Accounts marked <span className="font-medium text-plum-800">System</span> are resolved by
+            the posting engine through a stable internal code, not by their name or position. An
+            invoice always finds its receivable account that way. That is why a system account cannot
+            be archived or renamed out of existence — doing so would leave the posting engine with
+            nowhere to write.
+          </p>
+        </CardBody>
+      </Card>
+
+      {query.isLoading ? (
+        <PageLoader label="Loading the chart of accounts…" />
+      ) : query.isError ? (
+        <Card>
+          <ErrorState
+            message={errorMessage(query.error)}
+            action={
+              <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        </Card>
+      ) : (
+        <Card>
           <Table>
             <THead>
               <tr>
-                <TH>Code</TH>
+                <TH className="w-32">Code</TH>
                 <TH>Name</TH>
-                <TH>Type</TH>
-                <TH>System role</TH>
+                <TH className="w-36">Type</TH>
+                <TH className="w-32">System</TH>
+                <TH className="w-32 text-right">Actions</TH>
               </tr>
             </THead>
             <tbody>
               {accounts.length === 0 ? (
-                <EmptyRow colSpan={4}>No accounts configured.</EmptyRow>
+                <EmptyRow colSpan={5}>No accounts found.</EmptyRow>
               ) : (
-                accounts.map((a) => (
-                  <TR key={a.id} className={a.active ? '' : 'opacity-55'}>
-                    <TD className="tabular font-medium">{a.code}</TD>
-                    <TD>
-                      <div className="flex items-center gap-2">
-                        {a.name}
-                        {a.isSystem && <Lock className="h-3 w-3 text-violet-soft-500" />}
-                      </div>
+                accounts.map((account) => (
+                  <TR key={account.id} className={account.active ? undefined : 'opacity-60'}>
+                    <TD className="tabular text-muted-ink">{account.code}</TD>
+                    <TD className="font-medium">
+                      {account.name}
+                      {!account.active && (
+                        <Badge tone="neutral" className="ml-2">
+                          Archived
+                        </Badge>
+                      )}
                     </TD>
                     <TD>
-                      <Badge tone={typeTone[a.type]}>{titleCase(a.type)}</Badge>
+                      <Badge tone={typeTones[account.type]}>{titleCase(account.type)}</Badge>
                     </TD>
-                    <TD className="text-xs text-muted-ink">
-                      {a.systemCode ? titleCase(a.systemCode) : '—'}
+                    <TD>
+                      {account.isSystem ? (
+                        <Badge tone="info">
+                          <Lock className="mr-1 h-3 w-3" />
+                          System
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-ink">—</span>
+                      )}
+                    </TD>
+                    <TD className="text-right">
+                      {isAdmin && account.active && !account.isSystem ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={archive.isPending && archive.variables === account.id}
+                          onClick={() => archive.mutate(account.id)}
+                        >
+                          Archive
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-ink">—</span>
+                      )}
                     </TD>
                   </TR>
                 ))
               )}
             </tbody>
           </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
         open={open}
         onClose={() => setOpen(false)}
+        title="Add account"
+        description="A new account becomes available to manual entries straight away."
         size="sm"
-        title="New account"
-        description="Added accounts are available immediately for reporting."
         footer={
           <>
             <Button variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" form="account-form" loading={create.isPending}>
+            <Button loading={create.isPending} onClick={submit}>
               Create account
             </Button>
           </>
         }
       >
-        <form
-          id="account-form"
-          onSubmit={(e) => {
-            e.preventDefault()
-            create.mutate()
-          }}
-          className="space-y-4"
-        >
-          <FormRow label="Code" required>
+        <div className="space-y-4">
+          <FormRow label="Code" required error={errors.code}>
             <Input
               value={form.code}
-              onChange={(e) => setForm({ ...form, code: e.target.value })}
-              placeholder="e.g. 5200"
-              required
-              maxLength={20}
+              placeholder="1200"
+              onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
             />
           </FormRow>
-
-          <FormRow label="Name" required>
+          <FormRow label="Name" required error={errors.name}>
             <Input
               value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-              maxLength={150}
+              placeholder="Inventory"
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
           </FormRow>
-
           <FormRow label="Type" required>
             <Select
               value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value as AccountType })}
+              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as AccountType }))}
             >
-              <option value="ASSET">Asset</option>
-              <option value="LIABILITY">Liability</option>
-              <option value="EQUITY">Equity</option>
-              <option value="INCOME">Income</option>
-              <option value="EXPENSE">Expense</option>
+              {ACCOUNT_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {titleCase(t)}
+                </option>
+              ))}
             </Select>
           </FormRow>
-        </form>
+        </div>
       </Modal>
-    </>
+    </div>
   )
 }

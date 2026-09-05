@@ -1,103 +1,150 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { errorMessage } from '@/api/client'
-import { paymentsApi } from '@/api/endpoints'
-import type { PaymentDirection } from '@/api/types'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { Search } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppLayout'
+import { Card, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Field'
 import { Badge } from '@/components/ui/Badge'
-import { Card } from '@/components/ui/Card'
-import { Input, Select } from '@/components/ui/Field'
+import { EmptyRow, TD, TH, THead, TR, Table } from '@/components/ui/Table'
 import { ErrorState, PageLoader } from '@/components/ui/PageLoader'
-import { EmptyRow, Table, TD, TH, THead, TR } from '@/components/ui/Table'
-import { formatDate, formatMoney } from '@/lib/utils'
+import { tradeApi } from '@/api/endpoints'
+import { errorMessage } from '@/api/client'
+import { formatDate, formatMoney, titleCase } from '@/lib/utils'
+
+const PAGE_SIZE = 20
 
 export function PaymentsPage() {
   const [search, setSearch] = useState('')
-  const [direction, setDirection] = useState<PaymentDirection | ''>('')
+  const [page, setPage] = useState(0)
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['payments', search, direction],
-    queryFn: () =>
-      paymentsApi.search({
-        search: search || undefined,
-        direction: direction || undefined,
-        size: 100,
-      }),
+  const query = useQuery({
+    queryKey: ['payments', search, page],
+    queryFn: () => tradeApi.payments({ search: search || undefined, page, size: PAGE_SIZE }),
+    placeholderData: keepPreviousData,
   })
 
-  const payments = data?.content ?? []
+  const payments = query.data?.content ?? []
 
   return (
-    <>
+    <div>
       <PageHeader
         title="Payments"
-        description="Cash and bank movements settling invoices and bills. Each one posted its own journal entry."
+        description="Money in and money out, each one tied to the document it settles and the journal entry it wrote."
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Input
-          placeholder="Search by number or contact…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full sm:max-w-xs"
-        />
-        <Select
-          value={direction}
-          onChange={(e) => setDirection(e.target.value as PaymentDirection | '')}
-          className="w-44"
-        >
-          <option value="">All directions</option>
-          <option value="RECEIVE">Received</option>
-          <option value="PAY">Paid out</option>
-        </Select>
-      </div>
-
-      <Card>
-        {isLoading ? (
-          <PageLoader />
-        ) : isError ? (
-          <ErrorState message={errorMessage(error)} />
-        ) : (
-          <Table>
-            <THead>
-              <tr>
-                <TH>Number</TH>
-                <TH>Contact</TH>
-                <TH>Direction</TH>
-                <TH>Method</TH>
-                <TH>Date</TH>
-                <TH>Settles</TH>
-                <TH>Journal entry</TH>
-                <TH className="text-right">Amount</TH>
-              </tr>
-            </THead>
-            <tbody>
-              {payments.length === 0 ? (
-                <EmptyRow colSpan={8}>No payments recorded yet.</EmptyRow>
-              ) : (
-                payments.map((p) => (
-                  <TR key={p.id}>
-                    <TD className="font-medium">{p.paymentNo}</TD>
-                    <TD>{p.contactName}</TD>
-                    <TD>
-                      <Badge tone={p.direction === 'RECEIVE' ? 'success' : 'warning'}>
-                        {p.direction === 'RECEIVE' ? 'Received' : 'Paid out'}
-                      </Badge>
-                    </TD>
-                    <TD>
-                      <Badge tone="neutral">{p.method === 'BANK' ? 'Bank' : 'Cash'}</Badge>
-                    </TD>
-                    <TD className="text-muted-ink">{formatDate(p.paymentDate)}</TD>
-                    <TD className="text-muted-ink">{p.invoiceNo ?? p.billNo ?? '—'}</TD>
-                    <TD className="tabular text-xs text-muted-ink">{p.journalEntryNo ?? '—'}</TD>
-                    <TD className="tabular text-right font-medium">{formatMoney(p.amount)}</TD>
-                  </TR>
-                ))
-              )}
-            </tbody>
-          </Table>
-        )}
+      <Card className="mb-4">
+        <CardBody className="flex flex-wrap items-end gap-3 py-4">
+          <div>
+            <label className="mb-1 block text-[10px] font-medium text-muted-ink uppercase">
+              Search
+            </label>
+            <div className="relative">
+              <Search className="absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-ink" />
+              <Input
+                className="w-64 pl-8"
+                placeholder="Payment no, document or reference"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value)
+                  setPage(0)
+                }}
+              />
+            </div>
+          </div>
+        </CardBody>
       </Card>
-    </>
+
+      {query.isLoading ? (
+        <PageLoader label="Loading payments…" />
+      ) : query.isError ? (
+        <Card>
+          <ErrorState
+            message={errorMessage(query.error)}
+            action={
+              <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          <Card>
+            <Table>
+              <THead>
+                <tr>
+                  <TH className="w-36">Payment no</TH>
+                  <TH className="w-32">Date</TH>
+                  <TH className="w-28">Direction</TH>
+                  <TH className="w-24">Method</TH>
+                  <TH className="w-36">Against</TH>
+                  <TH>Counterparty</TH>
+                  <TH>Reference</TH>
+                  <TH className="w-36 text-right">Amount</TH>
+                  <TH className="w-36">Journal entry</TH>
+                </tr>
+              </THead>
+              <tbody>
+                {payments.length === 0 ? (
+                  <EmptyRow colSpan={9}>
+                    {search ? 'No payments match that search.' : 'No payments recorded yet.'}
+                  </EmptyRow>
+                ) : (
+                  payments.map((payment) => (
+                    <TR key={payment.id}>
+                      <TD className="tabular font-medium">{payment.paymentNo}</TD>
+                      <TD>{formatDate(payment.paymentDate)}</TD>
+                      <TD>
+                        <Badge tone={payment.direction === 'IN' ? 'success' : 'warning'}>
+                          {payment.direction === 'IN' ? 'Received' : 'Paid'}
+                        </Badge>
+                      </TD>
+                      <TD>{titleCase(payment.method)}</TD>
+                      <TD className="tabular text-xs">{payment.documentNo}</TD>
+                      <TD>
+                        {payment.counterpartyName ?? <span className="text-muted-ink">—</span>}
+                      </TD>
+                      <TD className="text-xs text-muted-ink">{payment.reference ?? '—'}</TD>
+                      <TD className="tabular text-right font-medium">
+                        {formatMoney(payment.amount)}
+                      </TD>
+                      <TD className="tabular text-xs text-muted-ink">
+                        {payment.journalEntryNo ?? '—'}
+                      </TD>
+                    </TR>
+                  ))
+                )}
+              </tbody>
+            </Table>
+          </Card>
+
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-ink">
+              Page {(query.data?.page ?? 0) + 1} of {Math.max(query.data?.totalPages ?? 1, 1)} —{' '}
+              {query.data?.totalElements ?? 0} payments
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(p - 1, 0))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={query.data?.last ?? true}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

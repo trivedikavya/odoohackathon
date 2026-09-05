@@ -1,317 +1,446 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Archive, ArchiveRestore, Pencil, Plus, Users } from 'lucide-react'
-import { errorMessage } from '@/api/client'
-import { contactsApi } from '@/api/endpoints'
-import type { Contact, ContactType } from '@/api/types'
-import { useAuth } from '@/auth/AuthContext'
+import { Link2, Plus, Search } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppLayout'
-import { Badge } from '@/components/ui/Badge'
+import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
 import { FormRow, Input, Select } from '@/components/ui/Field'
+import { Badge } from '@/components/ui/Badge'
 import { Modal } from '@/components/ui/Modal'
-import { ErrorState, PageLoader } from '@/components/ui/PageLoader'
-import { EmptyRow, Table, TD, TH, THead, TR } from '@/components/ui/Table'
+import { EmptyRow, TD, TH, THead, TR, Table } from '@/components/ui/Table'
+import { EmptyState, ErrorState, InlineLoader, PageLoader } from '@/components/ui/PageLoader'
 import { useToast } from '@/components/ui/Toast'
+import { masterApi } from '@/api/endpoints'
+import { errorMessage } from '@/api/client'
+import type { PartyType } from '@/api/types'
 import { titleCase } from '@/lib/utils'
 
-const blank = {
+const PARTY_TYPES: PartyType[] = ['SELLER', 'VENDOR', 'CUSTOMER']
+
+const typeTones: Record<PartyType, 'brand' | 'info' | 'warning'> = {
+  SELLER: 'brand',
+  VENDOR: 'warning',
+  CUSTOMER: 'info',
+}
+
+interface OfflineForm {
+  name: string
+  type: PartyType
+  email: string
+  phone: string
+  gstin: string
+  addressLine: string
+  city: string
+  state: string
+  pincode: string
+  creditDays: string
+}
+
+const EMPTY_OFFLINE: OfflineForm = {
   name: '',
-  type: 'CUSTOMER' as ContactType,
+  type: 'CUSTOMER',
   email: '',
-  mobile: '',
+  phone: '',
+  gstin: '',
   addressLine: '',
   city: '',
   state: '',
   pincode: '',
-  gstin: '',
+  creditDays: '30',
 }
 
 export function ContactsPage() {
-  const qc = useQueryClient()
   const toast = useToast()
-  const { isAdmin } = useAuth()
+  const queryClient = useQueryClient()
 
   const [search, setSearch] = useState('')
   const [includeArchived, setIncludeArchived] = useState(false)
-  const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState<Contact | null>(null)
-  const [form, setForm] = useState(blank)
+  const [offlineOpen, setOfflineOpen] = useState(false)
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [form, setForm] = useState<OfflineForm>(EMPTY_OFFLINE)
+  const [errors, setErrors] = useState<Partial<Record<keyof OfflineForm, string>>>({})
+  const [linkCreditDays, setLinkCreditDays] = useState('30')
 
-  const { data, isLoading, isError, error } = useQuery({
+  const query = useQuery({
     queryKey: ['contacts', search, includeArchived],
-    queryFn: () => contactsApi.search({ search: search || undefined, includeArchived, size: 100 }),
+    queryFn: () => masterApi.contacts({ search: search || undefined, includeArchived }),
   })
 
-  useEffect(() => {
-    if (!open) return
-    setForm(
-      editing
-        ? {
-            name: editing.name,
-            type: editing.type,
-            email: editing.email ?? '',
-            mobile: editing.mobile ?? '',
-            addressLine: editing.addressLine ?? '',
-            city: editing.city ?? '',
-            state: editing.state ?? '',
-            pincode: editing.pincode ?? '',
-            gstin: editing.gstin ?? '',
-          }
-        : blank,
-    )
-  }, [open, editing])
+  // Only fetched while the link dialog is open — it is a directory-wide lookup.
+  const suppliers = useQuery({
+    queryKey: ['suppliers'],
+    queryFn: () => masterApi.suppliers(),
+    enabled: linkOpen,
+  })
 
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['contacts'] })
-    qc.invalidateQueries({ queryKey: ['contact-options'] })
-    qc.invalidateQueries({ queryKey: ['dashboard'] })
-  }
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['contacts'] })
 
-  const save = useMutation({
-    mutationFn: (body: typeof blank) =>
-      editing ? contactsApi.update(editing.id, body) : contactsApi.create(body),
-    onSuccess: (c) => {
+  const createOffline = useMutation({
+    mutationFn: () =>
+      masterApi.createContact({
+        name: form.name.trim(),
+        type: form.type,
+        email: form.email.trim() || undefined,
+        phone: form.phone.trim() || undefined,
+        gstin: form.gstin.trim() || undefined,
+        addressLine: form.addressLine.trim() || undefined,
+        city: form.city.trim() || undefined,
+        state: form.state.trim() || undefined,
+        pincode: form.pincode.trim() || undefined,
+        creditDays: form.creditDays ? Number(form.creditDays) : undefined,
+      }),
+    onSuccess: () => {
+      toast.success('Contact added')
+      setOfflineOpen(false)
+      setForm(EMPTY_OFFLINE)
       invalidate()
-      setOpen(false)
-      setEditing(null)
-      toast.success(`${c.name} saved`)
     },
-    onError: (e) => toast.error(errorMessage(e)),
+    onError: (error) => toast.error(errorMessage(error)),
+  })
+
+  const link = useMutation({
+    mutationFn: (partyId: number) =>
+      masterApi.linkContact(partyId, linkCreditDays ? Number(linkCreditDays) : undefined),
+    onSuccess: () => {
+      toast.success('Counterparty linked')
+      setLinkOpen(false)
+      invalidate()
+    },
+    onError: (error) => toast.error(errorMessage(error)),
   })
 
   const archive = useMutation({
-    mutationFn: ({ id, archived }: { id: number; archived: boolean }) =>
-      archived ? contactsApi.restore(id) : contactsApi.archive(id),
+    mutationFn: (id: number) => masterApi.archiveContact(id),
     onSuccess: () => {
+      toast.success('Contact archived')
       invalidate()
-      toast.success('Contact updated')
     },
-    onError: (e) => toast.error(errorMessage(e)),
+    onError: (error) => toast.error(errorMessage(error)),
   })
 
-  const contacts = data?.content ?? []
+  const restore = useMutation({
+    mutationFn: (id: number) => masterApi.restoreContact(id),
+    onSuccess: () => {
+      toast.success('Contact restored')
+      invalidate()
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  })
+
+  const submitOffline = () => {
+    const next: Partial<Record<keyof OfflineForm, string>> = {}
+    if (!form.name.trim()) next.name = 'A name is required'
+    if (form.creditDays && Number.isNaN(Number(form.creditDays)))
+      next.creditDays = 'Must be a number'
+    setErrors(next)
+    if (Object.keys(next).length > 0) return
+    createOffline.mutate()
+  }
+
+  const contacts = query.data ?? []
+  const linkedPartyIds = new Set(contacts.map((c) => c.partyId))
+  const linkable = (suppliers.data ?? []).filter((s) => !linkedPartyIds.has(s.id))
 
   return (
-    <>
+    <div>
       <PageHeader
         title="Contacts"
-        description="Customers and vendors used across sales and purchase transactions."
+        description="Everyone you trade with. Counterparties marked “On platform” keep their own books, so any deal you agree with them is mirrored into their ledger automatically."
         action={
-          <Button
-            onClick={() => {
-              setEditing(null)
-              setOpen(true)
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            New contact
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setLinkOpen(true)}>
+              <Link2 className="h-4 w-4" />
+              Link registered party
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setForm(EMPTY_OFFLINE)
+                setErrors({})
+                setOfflineOpen(true)
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              Add offline contact
+            </Button>
+          </div>
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Input
-          placeholder="Search by name, email or mobile…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full sm:max-w-xs"
-        />
-        <label className="flex items-center gap-2 text-sm text-muted-ink">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(e) => setIncludeArchived(e.target.checked)}
-            className="h-4 w-4 rounded border-lilac-300 accent-[#663399]"
-          />
-          Show archived
-        </label>
-      </div>
+      <Card className="mb-4">
+        <CardBody className="flex flex-wrap items-end gap-3 py-4">
+          <div>
+            <label className="mb-1 block text-[10px] font-medium text-muted-ink uppercase">
+              Search
+            </label>
+            <div className="relative">
+              <Search className="absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-ink" />
+              <Input
+                className="w-64 pl-8"
+                placeholder="Name, email or city"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+          <label className="flex h-10 items-center gap-2 text-sm text-plum-800">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-lilac-300 accent-amethyst-600"
+              checked={includeArchived}
+              onChange={(e) => setIncludeArchived(e.target.checked)}
+            />
+            Show archived
+          </label>
+        </CardBody>
+      </Card>
 
-      <Card>
-        {isLoading ? (
-          <PageLoader />
-        ) : isError ? (
-          <ErrorState message={errorMessage(error)} />
-        ) : (
+      {query.isLoading ? (
+        <PageLoader label="Loading contacts…" />
+      ) : query.isError ? (
+        <Card>
+          <ErrorState
+            message={errorMessage(query.error)}
+            action={
+              <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        </Card>
+      ) : (
+        <Card>
           <Table>
             <THead>
               <tr>
                 <TH>Name</TH>
-                <TH>Type</TH>
+                <TH className="w-28">Type</TH>
                 <TH>Email</TH>
-                <TH>Mobile</TH>
-                <TH>City / State</TH>
-                <TH className="text-right">Actions</TH>
+                <TH className="w-36">Phone</TH>
+                <TH className="w-44">City / State</TH>
+                <TH className="w-28 text-right">Credit days</TH>
+                <TH className="w-36">Platform</TH>
+                <TH className="w-32 text-right">Actions</TH>
               </tr>
             </THead>
             <tbody>
               {contacts.length === 0 ? (
-                <EmptyRow colSpan={6}>No contacts found.</EmptyRow>
+                <EmptyRow colSpan={8}>
+                  {search ? 'No contacts match that search.' : 'No contacts yet.'}
+                </EmptyRow>
               ) : (
-                contacts.map((c) => (
-                  <TR key={c.id} className={c.active ? '' : 'opacity-55'}>
+                contacts.map((contact) => (
+                  <TR key={contact.id} className={contact.active ? undefined : 'opacity-60'}>
                     <TD className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-lilac-200 text-xs font-semibold text-amethyst-800">
-                          {c.name.charAt(0).toUpperCase()}
-                        </div>
-                        {c.name}
-                        {!c.active && <Badge tone="neutral">Archived</Badge>}
-                      </div>
+                      {contact.name}
+                      {!contact.active && (
+                        <Badge tone="neutral" className="ml-2">
+                          Archived
+                        </Badge>
+                      )}
                     </TD>
                     <TD>
-                      <Badge tone="brand">{titleCase(c.type)}</Badge>
+                      <Badge tone={typeTones[contact.type]}>{titleCase(contact.type)}</Badge>
                     </TD>
-                    <TD className="text-muted-ink">{c.email || '—'}</TD>
-                    <TD className="text-muted-ink">{c.mobile || '—'}</TD>
-                    <TD className="text-muted-ink">
-                      {[c.city, c.state].filter(Boolean).join(', ') || '—'}
+                    <TD>{contact.email ?? <span className="text-muted-ink">—</span>}</TD>
+                    <TD>{contact.phone ?? <span className="text-muted-ink">—</span>}</TD>
+                    <TD className="text-xs">
+                      {contact.city || contact.state ? (
+                        [contact.city, contact.state].filter(Boolean).join(', ')
+                      ) : (
+                        <span className="text-muted-ink">—</span>
+                      )}
                     </TD>
+                    <TD className="tabular text-right">{contact.creditDays}</TD>
                     <TD>
-                      <div className="flex justify-end gap-1">
+                      {contact.keepsBooks ? (
+                        <Badge tone="success">On platform</Badge>
+                      ) : (
+                        <span className="text-xs text-muted-ink">Offline</span>
+                      )}
+                    </TD>
+                    <TD className="text-right">
+                      {contact.active ? (
                         <Button
-                          size="sm"
                           variant="ghost"
-                          aria-label="Edit"
-                          onClick={() => {
-                            setEditing(c)
-                            setOpen(true)
-                          }}
+                          size="sm"
+                          loading={archive.isPending && archive.variables === contact.id}
+                          onClick={() => archive.mutate(contact.id)}
                         >
-                          <Pencil className="h-3.5 w-3.5" />
+                          Archive
                         </Button>
-                        {/* Archiving is Admin-only; the server rejects it for
-                            accountants regardless of what the UI shows. */}
-                        {isAdmin && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            aria-label={c.active ? 'Archive' : 'Restore'}
-                            onClick={() => archive.mutate({ id: c.id, archived: !c.active })}
-                          >
-                            {c.active ? (
-                              <Archive className="h-3.5 w-3.5" />
-                            ) : (
-                              <ArchiveRestore className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        )}
-                      </div>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={restore.isPending && restore.variables === contact.id}
+                          onClick={() => restore.mutate(contact.id)}
+                        >
+                          Restore
+                        </Button>
+                      )}
                     </TD>
                   </TR>
                 ))
               )}
             </tbody>
           </Table>
-        )}
-      </Card>
+        </Card>
+      )}
 
       <Modal
-        open={open}
-        onClose={() => {
-          setOpen(false)
-          setEditing(null)
-        }}
-        title={editing ? `Edit ${editing.name}` : 'New contact'}
-        description="A contact can act as a customer, a vendor, or both."
+        open={offlineOpen}
+        onClose={() => setOfflineOpen(false)}
+        title="Add offline contact"
+        description="For counterparties who are not registered on the platform. Their side of a deal is not mirrored anywhere."
         footer={
           <>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setOpen(false)
-                setEditing(null)
-              }}
-            >
+            <Button variant="outline" onClick={() => setOfflineOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" form="contact-form" loading={save.isPending}>
-              Save contact
+            <Button loading={createOffline.isPending} onClick={submitOffline}>
+              Add contact
             </Button>
           </>
         }
       >
-        <form
-          id="contact-form"
-          onSubmit={(e) => {
-            e.preventDefault()
-            save.mutate(form)
-          }}
-          className="grid gap-4 sm:grid-cols-2"
-        >
-          <FormRow label="Name" required className="sm:col-span-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormRow label="Name" required error={errors.name} className="sm:col-span-2">
             <Input
               value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-              maxLength={180}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
           </FormRow>
-
           <FormRow label="Type" required>
             <Select
               value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value as ContactType })}
+              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as PartyType }))}
             >
-              <option value="CUSTOMER">Customer</option>
-              <option value="VENDOR">Vendor</option>
-              <option value="BOTH">Both</option>
+              {PARTY_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {titleCase(t)}
+                </option>
+              ))}
             </Select>
           </FormRow>
-
+          <FormRow label="Credit days" error={errors.creditDays}>
+            <Input
+              type="number"
+              value={form.creditDays}
+              onChange={(e) => setForm((f) => ({ ...f, creditDays: e.target.value }))}
+            />
+          </FormRow>
           <FormRow label="Email">
             <Input
               type="email"
               value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
+              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
             />
           </FormRow>
-
-          <FormRow label="Mobile">
+          <FormRow label="Phone">
             <Input
-              value={form.mobile}
-              onChange={(e) => setForm({ ...form, mobile: e.target.value })}
+              value={form.phone}
+              onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
             />
           </FormRow>
-
-          <FormRow label="GSTIN">
+          <FormRow label="GSTIN" className="sm:col-span-2">
             <Input
               value={form.gstin}
-              onChange={(e) => setForm({ ...form, gstin: e.target.value })}
-              maxLength={20}
+              onChange={(e) => setForm((f) => ({ ...f, gstin: e.target.value }))}
             />
           </FormRow>
-
           <FormRow label="Address" className="sm:col-span-2">
             <Input
               value={form.addressLine}
-              onChange={(e) => setForm({ ...form, addressLine: e.target.value })}
+              onChange={(e) => setForm((f) => ({ ...f, addressLine: e.target.value }))}
             />
           </FormRow>
-
           <FormRow label="City">
-            <Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+            <Input
+              value={form.city}
+              onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
+            />
           </FormRow>
-
           <FormRow label="State">
             <Input
               value={form.state}
-              onChange={(e) => setForm({ ...form, state: e.target.value })}
+              onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
             />
           </FormRow>
-
           <FormRow label="Pincode">
             <Input
               value={form.pincode}
-              onChange={(e) => setForm({ ...form, pincode: e.target.value })}
+              onChange={(e) => setForm((f) => ({ ...f, pincode: e.target.value }))}
             />
           </FormRow>
-        </form>
+        </div>
       </Modal>
-    </>
+
+      <Modal
+        open={linkOpen}
+        onClose={() => setLinkOpen(false)}
+        title="Link registered party"
+        description="These parties already keep books here. Linking one means every deal you agree is written into both ledgers."
+        footer={
+          <Button variant="outline" onClick={() => setLinkOpen(false)}>
+            Done
+          </Button>
+        }
+      >
+        <div className="mb-4 max-w-40">
+          <FormRow label="Credit days">
+            <Input
+              type="number"
+              value={linkCreditDays}
+              onChange={(e) => setLinkCreditDays(e.target.value)}
+            />
+          </FormRow>
+        </div>
+
+        {suppliers.isLoading ? (
+          <div className="flex justify-center py-8">
+            <InlineLoader />
+          </div>
+        ) : suppliers.isError ? (
+          <ErrorState
+            message={errorMessage(suppliers.error)}
+            action={
+              <Button variant="outline" size="sm" onClick={() => void suppliers.refetch()}>
+                Retry
+              </Button>
+            }
+          />
+        ) : linkable.length === 0 ? (
+          <EmptyState
+            title="Nothing left to link"
+            description="Every registered party is already in your contact list."
+          />
+        ) : (
+          <div className="divide-y divide-lilac-100 rounded-lg border border-lilac-200">
+            {linkable.map((party) => (
+              <div key={party.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-plum-800">{party.name}</p>
+                  <p className="text-xs text-muted-ink">
+                    {titleCase(party.type)}
+                    {party.city || party.state
+                      ? ` — ${[party.city, party.state].filter(Boolean).join(', ')}`
+                      : ''}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  loading={link.isPending && link.variables === party.id}
+                  onClick={() => link.mutate(party.id)}
+                >
+                  Link
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+    </div>
   )
 }
-
-export const ContactsIcon = Users
