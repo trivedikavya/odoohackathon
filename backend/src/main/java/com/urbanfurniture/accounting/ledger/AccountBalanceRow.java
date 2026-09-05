@@ -1,19 +1,21 @@
 package com.urbanfurniture.accounting.ledger;
 
 import com.urbanfurniture.accounting.common.Money;
-import com.urbanfurniture.accounting.master.account.AccountType;
 
 import java.math.BigDecimal;
 
 /**
- * Aggregated debit/credit totals for one account, straight out of the ledger.
- * This is the only source used by the financial reports.
+ * Aggregated debit and credit totals for one account, straight out of the
+ * ledger. Every balance figure in every report is derived from this.
  */
 public record AccountBalanceRow(
         Long accountId,
         String code,
         String name,
         AccountType type,
+        /** Lets a caller pick a well-known account out of a full listing
+         *  instead of issuing a second query for it. Null for user-created accounts. */
+        SystemAccount systemCode,
         BigDecimal totalDebit,
         BigDecimal totalCredit) {
 
@@ -23,8 +25,8 @@ public record AccountBalanceRow(
     }
 
     /**
-     * Balance expressed on the account's natural side, so every figure a report
-     * shows is a positive number under normal conditions.
+     * Balance on the account's natural side, so every report figure reads
+     * as a positive number under normal conditions.
      */
     public BigDecimal naturalBalance() {
         return type.isDebitNormal()
@@ -32,7 +34,7 @@ public record AccountBalanceRow(
                 : Money.subtract(totalCredit, totalDebit);
     }
 
-    /** Signed balance in debit-positive terms; used to prove the ledger sums to zero. */
+    /** Debit-positive signed balance; used to prove the ledger sums to zero. */
     public BigDecimal signedDebitBalance() {
         return Money.subtract(totalDebit, totalCredit);
     }

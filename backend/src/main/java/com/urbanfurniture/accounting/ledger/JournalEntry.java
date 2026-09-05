@@ -1,6 +1,7 @@
 package com.urbanfurniture.accounting.ledger;
 
-import com.urbanfurniture.accounting.master.journal.Journal;
+import com.urbanfurniture.accounting.common.Money;
+import com.urbanfurniture.accounting.identity.Book;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -32,9 +33,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A ledger entry: a set of debit/credit lines that must sum to the same total.
- * Entries are immutable once written - corrections are made with a new
- * reversing entry, never by editing history.
+ * One balanced entry in one book's ledger.
+ * <p>
+ * Does not extend {@code Auditable} because entries are immutable: there
+ * is no "last modified by" for something that can never be modified.
  */
 @Entity
 @Table(name = "journal_entry")
@@ -50,7 +52,11 @@ public class JournalEntry {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "entry_no", nullable = false, unique = true, length = 30)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "book_id", nullable = false)
+    private Book book;
+
+    @Column(name = "entry_no", nullable = false, length = 30)
     private String entryNo;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
@@ -90,14 +96,14 @@ public class JournalEntry {
     }
 
     public BigDecimal totalDebit() {
-        return lines.stream()
-                .map(JournalLine::getDebit)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return lines.stream().map(JournalLine::getDebit).reduce(Money.ZERO, Money::add);
     }
 
     public BigDecimal totalCredit() {
-        return lines.stream()
-                .map(JournalLine::getCredit)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return lines.stream().map(JournalLine::getCredit).reduce(Money.ZERO, Money::add);
+    }
+
+    public boolean isBalanced() {
+        return Money.eq(totalDebit(), totalCredit());
     }
 }

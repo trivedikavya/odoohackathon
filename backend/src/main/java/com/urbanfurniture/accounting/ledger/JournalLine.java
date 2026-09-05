@@ -1,7 +1,7 @@
 package com.urbanfurniture.accounting.ledger;
 
-import com.urbanfurniture.accounting.master.account.Account;
-import com.urbanfurniture.accounting.master.contact.Contact;
+import com.urbanfurniture.accounting.analytic.AnalyticAccount;
+import com.urbanfurniture.accounting.master.Contact;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -19,14 +19,6 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 
-/**
- * One side of a ledger entry. Exactly one of {@code debit} / {@code credit}
- * is positive - enforced both here and by a database CHECK constraint.
- * <p>
- * {@code contact} is stamped on receivable/payable lines so per-customer and
- * per-vendor balances (and the aging report) can be derived from the ledger
- * itself rather than from a parallel summary table.
- */
 @Entity
 @Table(name = "journal_line")
 @Getter
@@ -48,9 +40,15 @@ public class JournalLine {
     @JoinColumn(name = "account_id", nullable = false)
     private Account account;
 
+    /** Set on receivable and payable lines; that is what a partner ledger reads. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "contact_id")
     private Contact contact;
+
+    /** Optional project attribution; purely a reporting dimension. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "analytic_account_id")
+    private AnalyticAccount analyticAccount;
 
     @Builder.Default
     @Column(name = "line_no", nullable = false)

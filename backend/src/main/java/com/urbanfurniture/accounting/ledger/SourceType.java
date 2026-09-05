@@ -1,9 +1,10 @@
 package com.urbanfurniture.accounting.ledger;
 
-/** What business document produced a ledger entry. */
+/** What produced a journal entry. */
 public enum SourceType {
     INVOICE,
     BILL,
     PAYMENT,
+    OPENING,
     MANUAL
 }

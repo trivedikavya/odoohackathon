@@ -8,30 +8,27 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Optional;
 
 public interface JournalEntryRepository extends JpaRepository<JournalEntry, Long> {
 
-    @EntityGraph(attributePaths = {"journal", "lines", "lines.account", "lines.contact"})
+    @EntityGraph(attributePaths = {"journal", "lines", "lines.account", "lines.contact", "lines.contact.party"})
     Optional<JournalEntry> findWithLinesById(Long id);
 
     /**
-     * {@code from}/{@code to} are resolved by the caller. The optional
-     * {@code sourceType} is wrapped in a cast so PostgreSQL can determine the
-     * parameter type in the {@code is null} branch.
+     * Nullable filters use {@code cast(... as string) is null} because
+     * PostgreSQL cannot infer a type for a bare null bind in this position.
      */
     @Query("""
             select e from JournalEntry e
-            where e.entryDate >= :from
-              and e.entryDate <= :to
+            where e.book.id = :bookId
               and (cast(:sourceType as string) is null or e.sourceType = :sourceType)
+              and e.entryDate >= :from and e.entryDate <= :to
             order by e.entryDate desc, e.id desc
             """)
-    Page<JournalEntry> search(@Param("from") LocalDate from,
-                              @Param("to") LocalDate to,
+    Page<JournalEntry> search(@Param("bookId") Long bookId,
                               @Param("sourceType") SourceType sourceType,
+                              @Param("from") LocalDate from,
+                              @Param("to") LocalDate to,
                               Pageable pageable);
-
-    List<JournalEntry> findBySourceTypeAndSourceId(SourceType sourceType, Long sourceId);
 }
