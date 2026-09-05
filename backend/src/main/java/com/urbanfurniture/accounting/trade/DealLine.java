@@ -1,6 +1,5 @@
-package com.urbanfurniture.accounting.transaction.sales;
+package com.urbanfurniture.accounting.trade;
 
-import com.urbanfurniture.accounting.master.product.Product;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -18,30 +17,40 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 
+/**
+ * One agreed line of a deal.
+ * <p>
+ * {@code description} is a snapshot rather than a product reference:
+ * products are book-scoped, and the two sides of a trade keep different
+ * catalogues. What both sides agree on is the wording, quantity and
+ * price — not each other's internal item codes.
+ */
 @Entity
-@Table(name = "sales_order_line")
+@Table(name = "deal_line")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class SalesOrderLine {
+public class DealLine {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "sales_order_id", nullable = false)
-    private SalesOrder salesOrder;
-
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "product_id", nullable = false)
-    private Product product;
+    @JoinColumn(name = "deal_id", nullable = false)
+    private Deal deal;
 
     @Builder.Default
     @Column(name = "line_no", nullable = false)
     private Integer lineNo = 1;
+
+    @Column(nullable = false, length = 180)
+    private String description;
+
+    @Column(name = "hsn_code", length = 20)
+    private String hsnCode;
 
     @Column(nullable = false, precision = 15, scale = 3)
     private BigDecimal quantity;
@@ -60,6 +69,18 @@ public class SalesOrderLine {
     @Builder.Default
     @Column(name = "tax_amount", nullable = false, precision = 15, scale = 2)
     private BigDecimal taxAmount = BigDecimal.ZERO;
+
+    @Builder.Default
+    @Column(name = "cgst_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal cgstAmount = BigDecimal.ZERO;
+
+    @Builder.Default
+    @Column(name = "sgst_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal sgstAmount = BigDecimal.ZERO;
+
+    @Builder.Default
+    @Column(name = "igst_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal igstAmount = BigDecimal.ZERO;
 
     @Builder.Default
     @Column(name = "line_total", nullable = false, precision = 15, scale = 2)

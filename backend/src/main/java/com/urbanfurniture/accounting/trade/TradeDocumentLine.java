@@ -1,6 +1,6 @@
-package com.urbanfurniture.accounting.transaction.purchase;
+package com.urbanfurniture.accounting.trade;
 
-import com.urbanfurniture.accounting.master.product.Product;
+import com.urbanfurniture.accounting.analytic.AnalyticAccount;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -19,29 +19,44 @@ import lombok.Setter;
 import java.math.BigDecimal;
 
 @Entity
-@Table(name = "purchase_order_line")
+@Table(name = "document_line")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class PurchaseOrderLine {
+public class TradeDocumentLine {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "purchase_order_id", nullable = false)
-    private PurchaseOrder purchaseOrder;
+    @JoinColumn(name = "document_id", nullable = false)
+    private TradeDocument document;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "product_id", nullable = false)
-    private Product product;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "deal_line_id")
+    private DealLine dealLine;
 
     @Builder.Default
     @Column(name = "line_no", nullable = false)
     private Integer lineNo = 1;
+
+    @Column(nullable = false, length = 180)
+    private String description;
+
+    @Column(name = "hsn_code", length = 20)
+    private String hsnCode;
+
+    /**
+     * Each side tags the same line to its own project, so this lives on
+     * the document rather than on the shared deal line: the buyer's cost
+     * centre is not the seller's business.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "analytic_account_id")
+    private AnalyticAccount analyticAccount;
 
     @Column(nullable = false, precision = 15, scale = 3)
     private BigDecimal quantity;
@@ -60,6 +75,18 @@ public class PurchaseOrderLine {
     @Builder.Default
     @Column(name = "tax_amount", nullable = false, precision = 15, scale = 2)
     private BigDecimal taxAmount = BigDecimal.ZERO;
+
+    @Builder.Default
+    @Column(name = "cgst_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal cgstAmount = BigDecimal.ZERO;
+
+    @Builder.Default
+    @Column(name = "sgst_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal sgstAmount = BigDecimal.ZERO;
+
+    @Builder.Default
+    @Column(name = "igst_amount", nullable = false, precision = 15, scale = 2)
+    private BigDecimal igstAmount = BigDecimal.ZERO;
 
     @Builder.Default
     @Column(name = "line_total", nullable = false, precision = 15, scale = 2)
