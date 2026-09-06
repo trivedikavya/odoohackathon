@@ -1,5 +1,6 @@
 package com.urbanfurniture.accounting.trade;
 
+import com.urbanfurniture.accounting.master.Product;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -46,6 +47,16 @@ public class DealLine {
     @Column(name = "line_no", nullable = false)
     private Integer lineNo = 1;
 
+    /**
+     * The <em>seller's</em> catalogue item — the thing being sold, which
+     * both sides agreed on. Nullable so an ad-hoc line ("site survey")
+     * can still be traded without inventing a product for it.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "product_id")
+    private Product product;
+
+    /** Snapshot of the name as agreed, so a later rename cannot rewrite history. */
     @Column(nullable = false, length = 180)
     private String description;
 

@@ -22,10 +22,18 @@ public final class TradeDtos {
     // ---------------- requests ----------------
 
     public record DealLineRequest(
-            @NotBlank @Size(max = 180) String description,
+            /**
+             * The seller''s catalogue item. Optional, so an ad-hoc line
+             * ("site survey") can still be traded, but required for
+             * anything that should move stock.
+             */
+            Long productId,
+            @Size(max = 180) String description,
             @Size(max = 20) String hsnCode,
             @NotNull @DecimalMin("0.001") @Digits(integer = 12, fraction = 3) BigDecimal quantity,
-            @NotNull @DecimalMin("0.00") @Digits(integer = 13, fraction = 2) BigDecimal unitPrice,
+            /** Optional when a product is given — it falls back to the catalogue price. */
+            @DecimalMin("0.00") @Digits(integer = 13, fraction = 2) BigDecimal unitPrice,
+            /** Optional when a product is given — it falls back to the product's rate. */
             @DecimalMin("0.00") @Digits(integer = 3, fraction = 2) BigDecimal taxRate) {
     }
 

@@ -5,7 +5,10 @@ import com.urbanfurniture.accounting.common.SearchTerms;
 import com.urbanfurniture.accounting.common.exception.ApiExceptions;
 import com.urbanfurniture.accounting.common.sequence.PlatformSequenceService;
 import com.urbanfurniture.accounting.identity.Party;
+import com.urbanfurniture.accounting.identity.BookRepository;
 import com.urbanfurniture.accounting.identity.PartyRepository;
+import com.urbanfurniture.accounting.master.Product;
+import com.urbanfurniture.accounting.master.ProductRepository;
 import com.urbanfurniture.accounting.security.AppUserPrincipal;
 import com.urbanfurniture.accounting.security.CurrentUser;
 import com.urbanfurniture.accounting.tax.GstSplit;
@@ -34,6 +37,8 @@ public class DealService {
 
     private final DealRepository dealRepository;
     private final PartyRepository partyRepository;
+    private final ProductRepository productRepository;
+    private final BookRepository bookRepository;
     private final TradeDocumentRepository documentRepository;
     private final PlatformSequenceService platformSequenceService;
     private final DocumentService documentService;
@@ -105,15 +110,35 @@ public class DealService {
                 .build();
 
         for (TradeDtos.DealLineRequest lr : request.lines()) {
-            BigDecimal rate = lr.taxRate() == null ? BigDecimal.ZERO : lr.taxRate();
-            LineAmounts amounts = LineAmounts.compute(lr.quantity(), lr.unitPrice(), rate);
+            // The item comes from the seller's catalogue, because that is
+            // what is being sold. Defaults for price, tax and HSN are
+            // taken from it so the buyer cannot quietly propose a
+            // different tax rate than the product carries.
+            Product product = resolveSellerProduct(seller, lr.productId());
+
+            BigDecimal rate = lr.taxRate() != null ? lr.taxRate()
+                    : product != null ? product.getTaxRate() : BigDecimal.ZERO;
+            BigDecimal price = lr.unitPrice() != null ? lr.unitPrice()
+                    : product != null ? product.getSalesPrice() : BigDecimal.ZERO;
+            String description = lr.description() != null && !lr.description().isBlank()
+                    ? lr.description().trim()
+                    : product != null ? product.getName() : null;
+
+            if (description == null) {
+                throw new ApiExceptions.BusinessRuleException(
+                        "Each line needs either a product or a description");
+            }
+
+            LineAmounts amounts = LineAmounts.compute(lr.quantity(), price, rate);
             GstSplit split = TaxCalculator.split(amounts.tax(), treatment);
 
             deal.addLine(DealLine.builder()
-                    .description(lr.description().trim())
-                    .hsnCode(lr.hsnCode())
+                    .product(product)
+                    .description(description)
+                    .hsnCode(lr.hsnCode() != null ? lr.hsnCode()
+                            : product != null ? product.getHsnCode() : null)
                     .quantity(lr.quantity())
-                    .unitPrice(lr.unitPrice())
+                    .unitPrice(price)
                     .taxRate(rate)
                     .untaxedAmount(amounts.untaxed())
                     .taxAmount(amounts.tax())
@@ -205,7 +230,14 @@ public class DealService {
         deal.setStatus(DealStatus.DELIVERED);
         deal.setDeliveredAt(request != null && request.deliveredAt() != null
                 ? request.deliveredAt() : LocalDate.now());
-        return mapper.toDealResponse(dealRepository.save(deal), partyId);
+        Deal delivered = dealRepository.save(deal);
+
+        // Delivery is when the goods actually leave, so this is when stock
+        // moves and the cost of sale is booked. Waiting for the invoice would
+        // show stock still on hand after it had been shipped.
+        documentService.issueStockForDelivery(delivered);
+
+        return mapper.toDealResponse(delivered, partyId);
     }
 
     @Transactional
@@ -233,6 +265,36 @@ public class DealService {
     }
 
     // ---------------- internals ----------------
+    /**
+     * Looks up an item in the selling party''s catalogue.
+     * <p>
+     * Scoped to the seller''s own book on purpose: a buyer passing a
+     * product id from their own catalogue - or anyone else''s - must not
+     * be able to attach it to someone else''s sale.
+     */
+    private Product resolveSellerProduct(Party seller, Long productId) {
+        if (productId == null) {
+            return null;
+        }
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ApiExceptions.NotFoundException("Product", productId));
+        Long sellerBookId = bookRepository.findByPartyId(seller.getId())
+                .map(b -> b.getId())
+                .orElseThrow(() -> new ApiExceptions.BusinessRuleException(
+                        "'" + seller.getName() + "' has no catalogue to sell from"));
+
+        if (!product.getBook().getId().equals(sellerBookId)) {
+            throw new ApiExceptions.BusinessRuleException(
+                    "'" + product.getName() + "' is not sold by " + seller.getName());
+        }
+        if (!Boolean.TRUE.equals(product.getActive())) {
+            throw new ApiExceptions.BusinessRuleException(
+                    "'" + product.getName() + "' is no longer available");
+        }
+        return product;
+    }
+
+
 
     Deal requireDeal(Long id) {
         return dealRepository.findWithLinesById(id)

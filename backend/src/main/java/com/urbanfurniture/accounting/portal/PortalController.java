@@ -149,6 +149,13 @@ public class PortalController {
         return masterDataService.supplierOptions();
     }
 
+    @GetMapping("/suppliers/{partyId}/catalogue")
+    @Operation(summary = "What that supplier sells, with live stock")
+    public List<MasterDtos.ProductResponse> supplierCatalogue(@PathVariable Long partyId) {
+        assertPortalUser();
+        return masterDataService.catalogueOf(partyId);
+    }
+
     @GetMapping("/my-orders")
     @Operation(summary = "Requests and orders you have raised")
     public PageResponse<TradeDtos.DealResponse> myOrders(

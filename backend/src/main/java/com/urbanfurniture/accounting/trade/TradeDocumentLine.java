@@ -1,6 +1,7 @@
 package com.urbanfurniture.accounting.trade;
 
 import com.urbanfurniture.accounting.analytic.AnalyticAccount;
+import com.urbanfurniture.accounting.master.Product;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -42,6 +43,17 @@ public class TradeDocumentLine {
     @Builder.Default
     @Column(name = "line_no", nullable = false)
     private Integer lineNo = 1;
+
+    /**
+     * The <em>owning book's</em> own catalogue item.
+     * <p>
+     * Deliberately not the same as {@code dealLine.product}: the seller
+     * stocks it under their entry and the buyer under theirs, so each
+     * side's inventory moves against its own product.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "product_id")
+    private Product product;
 
     @Column(nullable = false, length = 180)
     private String description;

@@ -18,17 +18,29 @@ import com.urbanfurniture.accounting.ledger.JournalType;
 import com.urbanfurniture.accounting.ledger.SourceType;
 import com.urbanfurniture.accounting.ledger.SystemAccount;
 import com.urbanfurniture.accounting.master.Contact;
+import com.urbanfurniture.accounting.master.ContactRelationship;
 import com.urbanfurniture.accounting.master.ContactRepository;
+import com.urbanfurniture.accounting.master.Product;
+import com.urbanfurniture.accounting.master.ProductRepository;
+import com.urbanfurniture.accounting.master.ProductType;
+import com.urbanfurniture.accounting.stock.StockMovement;
+import com.urbanfurniture.accounting.stock.StockMovementRepository;
+import com.urbanfurniture.accounting.stock.StockService;
+import com.urbanfurniture.accounting.stock.StockSource;
 import com.urbanfurniture.accounting.security.CurrentUser;
 import com.urbanfurniture.accounting.tax.GstTotals;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -56,6 +68,10 @@ public class DocumentService {
     private final BookRepository bookRepository;
     private final ContactRepository contactRepository;
     private final AnalyticAccountRepository analyticAccountRepository;
+    private final ProductRepository productRepository;
+    private final StockService stockService;
+    private final StockMovementRepository stockMovementRepository;
+    private final ReferenceDataProvisioner provisioner;
     private final com.urbanfurniture.accounting.common.sequence.BookSequenceService bookSequenceService;
     private final JournalPostingService journalPostingService;
     private final AccountLookup accounts;
@@ -147,6 +163,47 @@ public class DocumentService {
         return mapper.toDealResponse(deal, partyId);
     }
 
+    /**
+     * Records a trade that has already happened, in one step.
+     * <p>
+     * The RFQ round trip exists so two registered parties can agree
+     * terms. It is the wrong shape for a purchase from an offline
+     * supplier or a counter sale to a walk-in customer, where there is
+     * nobody on the other side to accept anything — so this path creates
+     * the order, the delivery and the invoice together.
+     * <p>
+     * The actor checks are the caller's job here; what this method still
+     * guarantees is the accounting: the same documents, the same stock
+     * movements and the same entries as the long route, so a direct sale
+     * and a negotiated one are indistinguishable in the ledger.
+     */
+    @Transactional
+    public void recordDirectTrade(Deal deal, Book myBook, boolean iAmSeller,
+                                  LocalDate docDate, LocalDate dueDate) {
+        // Strictly single-sided. Direct entry means "I am recording this
+        // myself" — the counterparty is not participating, and may not
+        // even hold an account here. Writing into their books on their
+        // behalf would put stock they never had on their shelf.
+        deal.setStatus(DealStatus.DELIVERED);
+        deal.setDeliveredAt(docDate);
+        dealRepository.save(deal);
+
+        if (iAmSeller) {
+            // The sales order is what the stock issue reads its lines from.
+            ensureDocument(deal, myBook, DocumentType.SALES_ORDER, deal.getBuyer(), docDate, null);
+            issueStockForDelivery(deal);
+            postInvoice(ensureDocument(deal, myBook, DocumentType.INVOICE,
+                    deal.getBuyer(), docDate, dueDate));
+        } else {
+            ensureDocument(deal, myBook, DocumentType.PURCHASE_ORDER, deal.getSeller(), docDate, null);
+            postBill(ensureDocument(deal, myBook, DocumentType.BILL,
+                    deal.getSeller(), docDate, dueDate));
+        }
+
+        deal.setStatus(DealStatus.INVOICED);
+        dealRepository.save(deal);
+    }
+
     /** Attaches a project tag to a line in the caller's own book. */
     @Transactional
     public TradeDtos.DocumentResponse tagLine(Long documentId, TradeDtos.TagLineRequest request) {
@@ -226,12 +283,20 @@ public class DocumentService {
 
     /**
      * <pre>
-     *   Dr  Purchase Expense           untaxed, one line per project
+     *   Dr  Inventory                  stocked goods, at cost
+     *   Dr  Purchase Expense           services and untracked items
      *   Dr  CGST + SGST Input Credit   tax   (intra-state)
      *   Dr  IGST Input Credit          tax   (inter-state)
      *   Dr  Input GST                  any tax not attributable
      *       Cr  Accounts Payable                   total (incl. tax)
      * </pre>
+     * <p>
+     * Buying stock is not an expense — it converts one asset (cash, or a
+     * promise to pay) into another (goods on the shelf). The cost only
+     * becomes an expense when the goods are sold, which is what
+     * {@link #issueStockForDelivery} does. Expensing purchases on receipt
+     * is what makes a profit figure lurch about with buying patterns
+     * rather than tracking trade.
      */
     private void postBill(TradeDocument bill) {
         if (bill.getStatus().isPosted()) {
@@ -248,7 +313,18 @@ public class DocumentService {
                 bill.getId(),
                 "Bill " + bill.getDocNo() + " from " + counterpartyName(bill));
 
-        untaxedByProject(bill).forEach((analytic, amount) -> draft.debit(
+        // Split the untaxed value by where it belongs: stocked goods
+        // capitalise, everything else expenses.
+        BigDecimal stocked = Money.ZERO;
+        for (TradeDocumentLine line : bill.getLines()) {
+            if (line.getProduct() != null && line.getProduct().tracksStock()) {
+                stocked = Money.add(stocked, line.getUntaxedAmount());
+            }
+        }
+        draft.debit(accounts.require(book, SystemAccount.INVENTORY), stocked,
+                "Goods received — " + bill.getDocNo());
+
+        untaxedByProject(bill, false).forEach((analytic, amount) -> draft.debit(
                 accounts.require(book, SystemAccount.PURCHASE_EXPENSE), null, analytic,
                 amount, "Purchases — " + bill.getDocNo()
                         + (analytic == null ? "" : " [" + analytic.getCode() + "]")));
@@ -269,6 +345,111 @@ public class DocumentService {
         bill.setJournalEntry(entry);
         bill.setStatus(DocumentStatus.POSTED);
         documentRepository.save(bill);
+
+        // The goods are now on the shelf, at what was actually paid.
+        receiveStockForBill(bill, entry);
+    }
+
+    /**
+     * Books the goods on a posted bill into stock, at the price paid.
+     * <p>
+     * The value written here is exactly the value debited to Inventory
+     * above, which is what keeps the stock ledger and the general ledger
+     * tied together — a tie-out the Stock Ledger report publishes rather
+     * than assumes.
+     */
+    private void receiveStockForBill(TradeDocument bill, JournalEntry entry) {
+        for (TradeDocumentLine line : bill.getLines()) {
+            Product product = line.getProduct();
+            if (product == null || !product.tracksStock()) {
+                continue;
+            }
+            BigDecimal unitCost = line.getQuantity().signum() == 0
+                    ? Money.ZERO
+                    : line.getUntaxedAmount().divide(line.getQuantity(), Money.SCALE, RoundingMode.HALF_UP);
+
+            stockService.receive(bill.getBook(), product, line.getQuantity(), unitCost,
+                    bill.getDocDate(), StockSource.BILL, bill.getId(), entry,
+                    "Received on " + bill.getDocNo());
+        }
+    }
+
+    /**
+     * Moves stock out when a sale is delivered, and expenses it.
+     * <pre>
+     *   Dr  Cost of Goods Sold    at weighted-average cost
+     *       Cr  Inventory
+     * </pre>
+     * <p>
+     * This runs at <b>delivery</b>, not invoicing, because delivery is
+     * when the goods actually leave. Waiting for the invoice would show
+     * stock still on hand after it had been shipped. Revenue is
+     * recognised separately when the invoice posts; the deal detail shows
+     * both entries together, which is what makes the margin on a sale
+     * visible.
+     * <p>
+     * Returns silently when the selling book holds no stocked items on
+     * the deal — a pure services sale has no cost of goods.
+     */
+    @Transactional
+    public void issueStockForDelivery(Deal deal) {
+        Book sellerBook = bookOf(deal.getSeller()).orElse(null);
+        if (sellerBook == null) {
+            return;
+        }
+        TradeDocument salesOrder = documentRepository
+                .findByDealIdAndBookIdAndDocType(deal.getId(), sellerBook.getId(), DocumentType.SALES_ORDER)
+                .orElse(null);
+        if (salesOrder == null) {
+            return;
+        }
+
+        // Expand combos to their components and total them, so a document
+        // listing the same item twice is checked against its real total.
+        List<StockService.Consumption> consumptions = new ArrayList<>();
+        for (TradeDocumentLine line : salesOrder.getLines()) {
+            consumptions.addAll(stockService.expand(line.getProduct(), line.getQuantity()));
+        }
+        Map<Product, BigDecimal> required = stockService.aggregate(consumptions);
+        if (required.isEmpty()) {
+            return;
+        }
+
+        // Check the whole delivery before writing any of it, so a
+        // five-line order cannot half-ship and then fail.
+        stockService.assertAvailable(sellerBook, required);
+
+        // Issue first: the movements decide the cost, and the journal
+        // entry has to carry exactly that figure.
+        List<StockMovement> issued = new ArrayList<>();
+        BigDecimal totalCost = Money.ZERO;
+        for (Map.Entry<Product, BigDecimal> e : required.entrySet()) {
+            StockMovement movement = stockService.issue(sellerBook, e.getKey(), e.getValue(),
+                    deal.getDeliveredAt(), StockSource.DELIVERY, salesOrder.getId(), null,
+                    "Delivered on " + deal.getDealNo());
+            issued.add(movement);
+            totalCost = Money.add(totalCost, movement.getTotalCost());
+        }
+
+        if (!Money.isPositive(totalCost)) {
+            return;
+        }
+
+        JournalEntryDraft draft = JournalEntryDraft.on(
+                        sellerBook,
+                        journals.require(sellerBook, JournalType.GENERAL),
+                        deal.getDeliveredAt(),
+                        SourceType.DELIVERY,
+                        salesOrder.getId(),
+                        "Cost of goods delivered — " + deal.getDealNo())
+                .debit(accounts.require(sellerBook, SystemAccount.COGS), totalCost,
+                        "Cost of sales — " + deal.getDealNo())
+                .credit(accounts.require(sellerBook, SystemAccount.INVENTORY), totalCost,
+                        "Stock issued — " + deal.getDealNo());
+
+        JournalEntry entry = journalPostingService.post(draft);
+        issued.forEach(m -> m.setJournalEntry(entry));
+        stockMovementRepository.saveAll(issued);
     }
 
     // ---------------- internals ----------------
@@ -295,7 +476,7 @@ public class DocumentService {
             return existing.get();
         }
 
-        Contact contact = resolveContact(book, counterparty);
+        Contact contact = resolveContact(book, counterparty, !docType.isSellSide());
 
         TradeDocument doc = TradeDocument.builder()
                 .deal(deal)
@@ -319,6 +500,7 @@ public class DocumentService {
         for (DealLine dl : deal.getLines()) {
             doc.addLine(TradeDocumentLine.builder()
                     .dealLine(dl)
+                    .product(resolveProductForBook(book, dl))
                     .description(dl.getDescription())
                     .hsnCode(dl.getHsnCode())
                     .quantity(dl.getQuantity())
@@ -344,20 +526,72 @@ public class DocumentService {
     }
 
     /**
+     * The catalogue item this line should move against, in <em>this</em>
+     * book.
+     * <p>
+     * The deal names the seller's product, because that is what the two
+     * sides agreed on. The seller's own document can use it directly. The
+     * buyer cannot: their stock lives under their own catalogue entry, so
+     * the item is matched by name and created if it is new. Buying
+     * something you do not stock therefore adds it to your catalogue,
+     * which is both what a user expects and the only way the buyer's
+     * inventory has anywhere to land.
+     */
+    private Product resolveProductForBook(Book book, DealLine dealLine) {
+        Product sellersProduct = dealLine.getProduct();
+        if (sellersProduct == null) {
+            // An ad-hoc line — nothing to stock.
+            return null;
+        }
+        if (sellersProduct.getBook().getId().equals(book.getId())) {
+            return sellersProduct;
+        }
+        return productRepository
+                .findFirstByBookIdAndNameIgnoreCase(book.getId(), sellersProduct.getName())
+                .orElseGet(() -> provisioner.createProduct(Product.builder()
+                        .book(book)
+                        .name(sellersProduct.getName())
+                        // A combo bought in is just goods to the buyer: its
+                        // recipe is the seller's business, not theirs.
+                        .type(sellersProduct.getType() == ProductType.SERVICE
+                                ? ProductType.SERVICE : ProductType.GOODS)
+                        .trackInventory(sellersProduct.getType() != ProductType.SERVICE)
+                        .salesPrice(BigDecimal.ZERO)
+                        .cost(dealLine.getUnitPrice())
+                        .hsnCode(sellersProduct.getHsnCode())
+                        .taxRate(dealLine.getTaxRate())
+                        .category(sellersProduct.getCategory())
+                        .active(true)
+                        .build()));
+    }
+
+    /**
      * A book's contact record for a counterparty, created on first trade.
      * <p>
      * Contacts are book-local, so trading with someone for the first time
      * naturally adds them to your address book rather than requiring the
      * user to key them in twice.
      */
-    private Contact resolveContact(Book book, Party counterparty) {
+    /**
+     * @param theySupplyUs true when this book is buying from them, which
+     *                     decides the address-book label
+     */
+    private Contact resolveContact(Book book, Party counterparty, boolean theySupplyUs) {
+        ContactRelationship relationship =
+                theySupplyUs ? ContactRelationship.VENDOR : ContactRelationship.CUSTOMER;
+
         return contactRepository.findByBookIdAndPartyId(book.getId(), counterparty.getId())
-                .orElseGet(() -> contactRepository.save(Contact.builder()
-                        .book(book)
-                        .party(counterparty)
-                        .creditDays(30)
-                        .active(true)
-                        .build()));
+                .orElseGet(() -> {
+                    try {
+                        return provisioner.createContact(book, counterparty, relationship);
+                    } catch (DataIntegrityViolationException e) {
+                        // Another request created it between our look and
+                        // our insert. Theirs is as good as ours.
+                        return contactRepository
+                                .findByBookIdAndPartyId(book.getId(), counterparty.getId())
+                                .orElseThrow(() -> e);
+                    }
+                });
     }
 
     private LocalDate resolveDueDate(TradeDtos.InvoiceRequest request, Book sellerBook,
@@ -399,10 +633,27 @@ public class DocumentService {
      * which would split one project's costs across two ledger lines.
      */
     private Map<AnalyticAccount, BigDecimal> untaxedByProject(TradeDocument doc) {
+        return untaxedByProject(doc, null);
+    }
+
+    /**
+     * @param stocked {@code null} for every line; {@code true} or
+     *                {@code false} to take only lines whose product does
+     *                or does not carry stock. That split is what lets a
+     *                bill capitalise its goods and expense its services
+     *                from the same document.
+     */
+    private Map<AnalyticAccount, BigDecimal> untaxedByProject(TradeDocument doc, Boolean stocked) {
         Map<Long, AnalyticAccount> byId = new LinkedHashMap<>();
         Map<Long, BigDecimal> totals = new LinkedHashMap<>();
 
         for (TradeDocumentLine line : doc.getLines()) {
+            if (stocked != null) {
+                boolean tracks = line.getProduct() != null && line.getProduct().tracksStock();
+                if (tracks != stocked) {
+                    continue;
+                }
+            }
             AnalyticAccount analytic = line.getAnalyticAccount();
             Long key = analytic == null ? null : analytic.getId();
             byId.putIfAbsent(key, analytic);
