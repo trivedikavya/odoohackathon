@@ -31,6 +31,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class FinancialReportService {
 
+    private static final BigDecimal HUNDRED = new BigDecimal("100");
+
     private final JournalLineRepository journalLineRepository;
     private final TradeDocumentRepository documentRepository;
     private final DealRepository dealRepository;
@@ -73,11 +75,27 @@ public class FinancialReportService {
         LocalDate end = to == null ? LocalDate.now() : to;
 
         List<AccountBalanceRow> rows = journalLineRepository.balancesBetween(bookId, start, end);
-        ReportDtos.ReportSection income = section("Income", rows, AccountType.INCOME);
-        ReportDtos.ReportSection expenses = section("Expenses", rows, AccountType.EXPENSE);
+        ReportDtos.ReportSection income = section("Revenue", rows, AccountType.INCOME);
 
-        return new ReportDtos.ProfitAndLoss(start, end, income, expenses,
-                income.total(), expenses.total(), Money.subtract(income.total(), expenses.total()));
+        // Cost of sales is separated from the other expenses so gross
+        // margin is visible. "We sold 28 lakh that cost us 17 lakh" says
+        // something "we spent 20 lakh" does not.
+        ReportDtos.ReportSection costOfSales =
+                section("Cost of sales", rows, AccountType.EXPENSE, true);
+        ReportDtos.ReportSection expenses =
+                section("Operating expenses", rows, AccountType.EXPENSE, false);
+
+        BigDecimal grossProfit = Money.subtract(income.total(), costOfSales.total());
+        BigDecimal netProfit = Money.subtract(grossProfit, expenses.total());
+
+        BigDecimal marginPercent = Money.isZero(income.total())
+                ? null
+                : grossProfit.multiply(HUNDRED)
+                        .divide(income.total(), 1, java.math.RoundingMode.HALF_UP);
+
+        return new ReportDtos.ProfitAndLoss(start, end, income, costOfSales, expenses,
+                income.total(), costOfSales.total(), grossProfit, marginPercent,
+                expenses.total(), netProfit);
     }
 
     @Transactional(readOnly = true)
@@ -147,8 +165,21 @@ public class FinancialReportService {
     // ---------------- internals ----------------
 
     private ReportDtos.ReportSection section(String title, List<AccountBalanceRow> rows, AccountType type) {
+        return section(title, rows, type, null);
+    }
+
+    /**
+     * @param costOfSales {@code null} for every account of the type;
+     *                    {@code true} for the COGS account alone;
+     *                    {@code false} for every other expense. That split
+     *                    is what separates gross margin from overheads.
+     */
+    private ReportDtos.ReportSection section(String title, List<AccountBalanceRow> rows,
+                                             AccountType type, Boolean costOfSales) {
         List<ReportDtos.ReportLine> lines = rows.stream()
                 .filter(r -> r.type() == type)
+                .filter(r -> costOfSales == null
+                        || (r.systemCode() == SystemAccount.COGS) == costOfSales)
                 // A zero balance is noise, not information.
                 .filter(r -> !Money.isZero(r.naturalBalance()))
                 .map(r -> new ReportDtos.ReportLine(

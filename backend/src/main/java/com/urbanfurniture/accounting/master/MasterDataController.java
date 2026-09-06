@@ -33,6 +33,12 @@ public class MasterDataController {
         return service.supplierOptions();
     }
 
+    @GetMapping("/suppliers/{partyId}/catalogue")
+    @Operation(summary = "What that supplier sells, with live stock")
+    public List<MasterDtos.ProductResponse> supplierCatalogue(@PathVariable Long partyId) {
+        return service.catalogueOf(partyId);
+    }
+
     @GetMapping("/contacts")
     public List<MasterDtos.ContactResponse> contacts(
             @RequestParam(required = false) String search,

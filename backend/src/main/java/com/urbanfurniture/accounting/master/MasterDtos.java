@@ -3,6 +3,7 @@ package com.urbanfurniture.accounting.master;
 import com.urbanfurniture.accounting.identity.PartyType;
 import com.urbanfurniture.accounting.ledger.AccountType;
 import com.urbanfurniture.accounting.ledger.JournalType;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Email;
@@ -12,6 +13,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 public final class MasterDtos {
 
@@ -29,6 +31,7 @@ public final class MasterDtos {
             Long id, Long partyId, String name, PartyType type,
             String email, String phone, String gstin,
             String city, String state, Integer creditDays, Boolean active,
+            ContactRelationship relationship,
             /** True when this counterparty keeps books, so deals mirror. */
             boolean keepsBooks) {
     }
@@ -48,7 +51,9 @@ public final class MasterDtos {
             @Size(max = 100) String city,
             @Size(max = 100) String state,
             @Size(max = 20) String pincode,
-            @Min(0) Integer creditDays) {
+            @Min(0) Integer creditDays,
+            /** How this book deals with them. Defaults from the party type. */
+            ContactRelationship relationship) {
     }
 
     /** Linking an already-registered party into this book's address list. */
@@ -57,6 +62,17 @@ public final class MasterDtos {
 
     // ---------------- products ----------------
 
+    public record ComponentRequest(
+            @NotNull Long componentProductId,
+            @NotNull @DecimalMin("0.001") @Digits(integer = 12, fraction = 3) BigDecimal quantity) {
+    }
+
+    public record ComponentResponse(
+            Long componentProductId, String componentName, BigDecimal quantity,
+            /** How many of this component are on hand right now. */
+            BigDecimal quantityOnHand) {
+    }
+
     public record ProductRequest(
             @NotBlank @Size(max = 180) String name,
             @NotNull ProductType type,
@@ -64,12 +80,21 @@ public final class MasterDtos {
             @DecimalMin("0.00") @Digits(integer = 13, fraction = 2) BigDecimal cost,
             @Size(max = 20) String hsnCode,
             @DecimalMin("0.00") @Digits(integer = 3, fraction = 2) BigDecimal taxRate,
-            @Size(max = 100) String category) {
+            @Size(max = 100) String category,
+
+            /** Required for a COMBO, ignored otherwise. */
+
+            @Valid List<ComponentRequest> components) {
     }
 
     public record ProductResponse(
             Long id, String name, ProductType type, BigDecimal salesPrice, BigDecimal cost,
-            String hsnCode, BigDecimal taxRate, String category, Boolean active) {
+            String hsnCode, BigDecimal taxRate, String category, Boolean active,
+            boolean tracksStock,
+            /** Live figure from the stock ledger; null for anything that carries no stock. */
+            BigDecimal quantityOnHand,
+            BigDecimal averageCost,
+            List<ComponentResponse> components) {
     }
 
     // ---------------- chart of accounts ----------------

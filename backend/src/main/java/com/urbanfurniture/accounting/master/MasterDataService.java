@@ -12,12 +12,16 @@ import com.urbanfurniture.accounting.ledger.AccountRepository;
 import com.urbanfurniture.accounting.ledger.Journal;
 import com.urbanfurniture.accounting.ledger.JournalRepository;
 import com.urbanfurniture.accounting.security.CurrentUser;
+import com.urbanfurniture.accounting.stock.StockPosition;
+import com.urbanfurniture.accounting.stock.StockService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -38,6 +42,7 @@ public class MasterDataService {
     private final PartyRepository partyRepository;
     private final BookRepository bookRepository;
     private final CurrentUser currentUser;
+    private final StockService stockService;
 
     // ---------------- counterparties ----------------
 
@@ -89,6 +94,8 @@ public class MasterDataService {
                 .book(book)
                 .party(party)
                 .creditDays(request.creditDays() == null ? 30 : request.creditDays())
+                .relationship(request.relationship() != null ? request.relationship()
+                        : defaultRelationship(request.type()))
                 .active(true)
                 .build());
 
@@ -126,6 +133,25 @@ public class MasterDataService {
 
     // ---------------- products ----------------
 
+    /**
+     * Another party's sellable catalogue, with live stock.
+     * <p>
+     * Read-only and deliberately not book-scoped to the caller: a buyer
+     * has to be able to see what a supplier offers before they can ask
+     * for it. Only active items are exposed, and only prices and
+     * availability — nothing about the seller's costs or margins.
+     */
+    @Transactional(readOnly = true)
+    public List<MasterDtos.ProductResponse> catalogueOf(Long sellerPartyId) {
+        Book sellerBook = bookRepository.findByPartyId(sellerPartyId)
+                .orElseThrow(() -> new ApiExceptions.NotFoundException(
+                        "That party does not sell anything here"));
+
+        return productRepository.findByBookIdAndActiveTrueOrderByNameAsc(sellerBook.getId()).stream()
+                .map(this::toProductResponse)
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public List<MasterDtos.ProductResponse> products(String search, boolean includeArchived) {
         Long bookId = currentUser.requireBookId();
@@ -138,17 +164,23 @@ public class MasterDataService {
     @PreAuthorize("hasAnyRole('ADMIN','ACCOUNTANT')")
     public MasterDtos.ProductResponse createProduct(MasterDtos.ProductRequest request) {
         Book book = currentUser.requireBook();
-        return toProductResponse(productRepository.save(Product.builder()
+        Product product = Product.builder()
                 .book(book)
                 .name(request.name().trim())
                 .type(request.type())
+                // Derived from the type rather than accepted from the
+                // client, so a service can never claim to carry stock.
+                .trackInventory(request.type().tracksStock())
                 .salesPrice(nz(request.salesPrice()))
                 .cost(nz(request.cost()))
                 .hsnCode(trimToNull(request.hsnCode()))
                 .taxRate(nz(request.taxRate()))
                 .category(trimToNull(request.category()))
                 .active(true)
-                .build()));
+                .build();
+
+        applyComponents(product, request);
+        return toProductResponse(productRepository.save(product));
     }
 
     @Transactional
@@ -157,12 +189,44 @@ public class MasterDataService {
         Product product = requireProduct(id);
         product.setName(request.name().trim());
         product.setType(request.type());
+        product.setTrackInventory(request.type().tracksStock());
         product.setSalesPrice(nz(request.salesPrice()));
         product.setCost(nz(request.cost()));
         product.setHsnCode(trimToNull(request.hsnCode()));
         product.setTaxRate(nz(request.taxRate()));
         product.setCategory(trimToNull(request.category()));
+
+        product.getComponents().clear();
+        applyComponents(product, request);
         return toProductResponse(productRepository.save(product));
+    }
+
+    /**
+     * Builds a combo's recipe.
+     * <p>
+     * Components must be plain items. Allowing a combo inside a combo
+     * would mean expansion had to recurse, and a cycle would hang the
+     * sale rather than fail it.
+     */
+    private void applyComponents(Product product, MasterDtos.ProductRequest request) {
+        if (product.getType() != ProductType.COMBO) {
+            return;
+        }
+        if (request.components() == null || request.components().isEmpty()) {
+            throw new ApiExceptions.BusinessRuleException("A combo needs at least one component");
+        }
+        for (MasterDtos.ComponentRequest cr : request.components()) {
+            Product component = requireProduct(cr.componentProductId());
+            if (component.getType() == ProductType.COMBO) {
+                throw new ApiExceptions.BusinessRuleException(
+                        "'" + component.getName() + "' is itself a combo and cannot be a component");
+            }
+            product.getComponents().add(ProductComponent.builder()
+                    .combo(product)
+                    .component(component)
+                    .quantity(cr.quantity())
+                    .build());
+        }
     }
 
     @Transactional
@@ -273,18 +337,61 @@ public class MasterDataService {
                 p.getId(), p.getName(), p.getType(), p.getCity(), p.getState(), p.keepsBooks());
     }
 
+    /**
+     * A sensible default for a new contact's label, taken from what the
+     * party is. A seller or vendor you add is presumably someone you buy
+     * from; anyone else is presumably someone you sell to.
+     */
+    private static ContactRelationship defaultRelationship(PartyType type) {
+        return type == PartyType.CUSTOMER ? ContactRelationship.CUSTOMER : ContactRelationship.VENDOR;
+    }
+
     private MasterDtos.ContactResponse toContactResponse(Contact c) {
         Party p = c.getParty();
         return new MasterDtos.ContactResponse(
                 c.getId(), p.getId(), p.getName(), p.getType(), p.getEmail(), p.getPhone(),
                 p.getGstin(), p.getCity(), p.getState(), c.getCreditDays(), c.getActive(),
-                p.keepsBooks());
+                c.getRelationship(), p.keepsBooks());
     }
 
+    /**
+     * Includes the live quantity and average cost from the stock ledger,
+     * so a catalogue listing shows what is actually on the shelf rather
+     * than only what the item is called.
+     */
     private MasterDtos.ProductResponse toProductResponse(Product p) {
+        BigDecimal quantity = null;
+        BigDecimal averageCost = null;
+
+        if (p.tracksStock()) {
+            StockPosition position = stockService.positionOf(
+                    p.getBook().getId(), p.getId(), LocalDate.now());
+            quantity = position.quantity();
+            averageCost = position.averageCost();
+        }
+
+        // A combo has no stock of its own, so its availability is the
+        // number of whole bundles its scarcest component can supply.
+        List<MasterDtos.ComponentResponse> components = p.getComponents().stream()
+                .map(c -> new MasterDtos.ComponentResponse(
+                        c.getComponent().getId(),
+                        c.getComponent().getName(),
+                        c.getQuantity(),
+                        stockService.positionOf(p.getBook().getId(), c.getComponent().getId(),
+                                LocalDate.now()).quantity()))
+                .toList();
+
+        if (p.isCombo() && !components.isEmpty()) {
+            quantity = components.stream()
+                    .map(c -> c.quantityOnHand().divide(c.quantity(), 0, RoundingMode.DOWN))
+                    .reduce(BigDecimal::min)
+                    .orElse(BigDecimal.ZERO);
+        }
+
         return new MasterDtos.ProductResponse(
                 p.getId(), p.getName(), p.getType(), p.getSalesPrice(), p.getCost(),
-                p.getHsnCode(), p.getTaxRate(), p.getCategory(), p.getActive());
+                p.getHsnCode(), p.getTaxRate(), p.getCategory(), p.getActive(),
+                p.tracksStock(), quantity, averageCost, components);
     }
 
     private MasterDtos.AccountResponse toAccountResponse(Account a) {

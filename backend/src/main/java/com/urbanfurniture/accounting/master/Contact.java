@@ -5,6 +5,8 @@ import com.urbanfurniture.accounting.identity.Book;
 import com.urbanfurniture.accounting.identity.Party;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -50,6 +52,14 @@ public class Contact extends Auditable {
     @Builder.Default
     @Column(name = "credit_days", nullable = false)
     private Integer creditDays = 30;
+    /**
+     * How this book deals with them. A label only - trading direction is
+     * decided per deal, so a party marked CUSTOMER can still supply you.
+     */
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private ContactRelationship relationship = ContactRelationship.CUSTOMER;
 
     @Builder.Default
     @Column(nullable = false)

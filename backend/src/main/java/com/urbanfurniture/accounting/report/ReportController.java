@@ -22,6 +22,7 @@ public class ReportController {
     private final AgingReportService agingReportService;
     private final ReconciliationService reconciliationService;
     private final ChartService chartService;
+    private final StockReportService stockReportService;
     private final AnalyticService analyticService;
 
     @GetMapping("/dashboard")
@@ -71,6 +72,13 @@ public class ReportController {
     public ReportDtos.BudgetReport budget(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate asOf) {
         return analyticService.budgetReport(asOf);
+    }
+
+    @GetMapping("/stock-ledger")
+    @Operation(summary = "Stock on hand, cross-checked against the Inventory account")
+    public ReportDtos.StockLedger stockLedger(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate asOf) {
+        return stockReportService.stockLedger(asOf);
     }
 
     @GetMapping("/sales-trend")

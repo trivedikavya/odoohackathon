@@ -30,10 +30,55 @@ public final class ReportDtos {
             boolean balanced) {
     }
 
+    /**
+     * Revenue less the cost of what was sold, then less overheads.
+     * <p>
+     * Splitting cost of sales out of the other expenses is what makes
+     * gross margin visible - "we sold 28 lakh of furniture that cost us
+     * 17 lakh to buy" is a different and more useful statement than "we
+     * spent 20 lakh".
+     */
     public record ProfitAndLoss(
             LocalDate from, LocalDate to,
-            ReportSection income, ReportSection expenses,
-            BigDecimal totalIncome, BigDecimal totalExpenses, BigDecimal netProfit) {
+            ReportSection income,
+            ReportSection costOfSales,
+            ReportSection expenses,
+            BigDecimal totalIncome,
+            BigDecimal totalCostOfSales,
+            BigDecimal grossProfit,
+            /** Gross profit as a percentage of revenue; null when there was none. */
+            BigDecimal grossMarginPercent,
+            BigDecimal totalExpenses,
+            BigDecimal netProfit) {
+    }
+
+    // ---------------- stock ----------------
+
+    public record StockRow(
+            Long productId, String productName, com.urbanfurniture.accounting.master.ProductType type,
+            BigDecimal quantityOnHand, BigDecimal averageCost, BigDecimal value) {
+    }
+
+    /**
+     * Stock on hand, cross-checked against the Inventory account.
+     * <p>
+     * The two are written by different code paths, so publishing the
+     * comparison turns "inventory is tracked" into something a reader can
+     * verify rather than take on trust.
+     */
+    public record StockLedger(
+            LocalDate asOf,
+            List<StockRow> rows,
+            BigDecimal totalValue,
+            BigDecimal ledgerBalance,
+            BigDecimal difference,
+            boolean reconciled) {
+    }
+
+    public record TopProduct(
+            Long productId, String productName,
+            BigDecimal unitsSold, BigDecimal revenue, BigDecimal cost,
+            BigDecimal margin, BigDecimal marginPercent) {
     }
 
     /** Every account's debit and credit, proving the ledger sums to zero. */
