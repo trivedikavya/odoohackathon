@@ -13,8 +13,13 @@ spring:
     password: ${DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 5
+      # Sized for the row locks the posting engine takes. Document
+      # numbering and stock issuing both serialise on a row, so a thread
+      # can be holding one connection while waiting behind another - too
+      # small a pool turns that into a deadlock rather than a queue.
+      maximum-pool-size: 20
       connection-timeout: 30000
+      leak-detection-threshold: 60000
 
   jpa:
     hibernate:
