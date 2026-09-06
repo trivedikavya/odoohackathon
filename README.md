@@ -1,4 +1,4 @@
-# 🏢 Multi-Party Double-Entry Accounting System
+# Multi-Party Double-Entry Accounting System
 
 <p align="center">
   <a href="#-stack--technologies">
@@ -18,23 +18,6 @@
 
 > **A Next-Generation Double-Entry Bookkeeping Engine for B2B Ecosystems**  
 > Every Rupee that moves between Sellers and Vendors is recorded as an independent, perfectly balanced pair of journal entries across isolated ledgers—computed live with zero summary tables or data drift.
-
----
-
-## 📑 Table of Contents
-
-- [✨ Core Concept & Multi-Party Architecture](#-core-concept--multi-party-architecture)
-- [🛡️ Enforced Invariants & Ledger Rules](#%EF%B8%8F-enforced-invariants--ledger-rules)
-- [🧩 Domain Model & Identity Matrix](#-domain-model--identity-matrix)
-- [🔄 Deal Lifecycle & Mirrored Workflow](#-deal-lifecycle--mirrored-workflow)
-- [🇮🇳 Indian GST Tax Engine (CGST / SGST / IGST)](#-indian-gst-tax-engine-cgst--sgst--igst)
-- [🚀 Quick Start & Installation](#-quick-start--installation)
-- [🔑 Demo Credentials & Test Logins](#-demo-credentials--test-logins)
-- [🔒 Security & Credential Policies](#-security--credential-policies)
-- [🧪 Verification & Test Suite](#-verification--test-suite)
-- [📁 Project Layout & Architecture](#-project-layout--architecture)
-- [💡 Architectural Decisions](#-architectural-decisions)
-- [📊 System Capabilities & Feature Status](#-system-capabilities--feature-status)
 
 ---
 
