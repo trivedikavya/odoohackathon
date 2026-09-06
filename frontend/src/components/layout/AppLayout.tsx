@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
+  Banknote,
   Boxes,
   Building2,
   ChevronDown,
@@ -12,6 +13,7 @@ import {
   ListTree,
   LogOut,
   Menu,
+  Package,
   PiggyBank,
   Scale,
   ScrollText,
@@ -50,6 +52,7 @@ const navigation: NavGroup[] = [
       { to: '/deals', label: 'Deals & Requests', icon: Handshake },
       { to: '/documents', label: 'Documents', icon: ClipboardList },
       { to: '/payments', label: 'Payments', icon: Wallet },
+      { to: '/operations', label: 'Cash & Stock Entry', icon: Banknote },
     ],
   },
   {
@@ -68,6 +71,7 @@ const navigation: NavGroup[] = [
       { to: '/reports/profit-and-loss', label: 'Profit & Loss', icon: TrendingUp },
       { to: '/reports/aging', label: 'AR / AP Aging', icon: Clock },
       { to: '/reports/reconciliation', label: 'Reconciliation', icon: ShieldCheck },
+      { to: '/reports/stock-ledger', label: 'Stock Ledger', icon: Package },
     ],
   },
   {

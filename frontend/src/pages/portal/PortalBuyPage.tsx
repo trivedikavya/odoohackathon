@@ -1,31 +1,47 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Send, Trash2 } from 'lucide-react'
+import { Package, Plus, Send, Trash2 } from 'lucide-react'
 import { errorMessage } from '@/api/client'
 import { portalApi } from '@/api/endpoints'
-import type { DealLineRequest } from '@/api/types'
+import type { Product } from '@/api/types'
 import { PageHeader } from '@/components/layout/AppLayout'
 import { Badge, StatusBadge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { FormRow, Input, Select, Textarea } from '@/components/ui/Field'
 import { Modal } from '@/components/ui/Modal'
-import { ErrorState, PageLoader } from '@/components/ui/PageLoader'
+import { EmptyState, ErrorState, InlineLoader, PageLoader } from '@/components/ui/PageLoader'
 import { EmptyRow, Table, TD, TH, THead, TR } from '@/components/ui/Table'
 import { useToast } from '@/components/ui/Toast'
-import { formatDate, formatMoney, titleCase, today } from '@/lib/utils'
+import { formatDate, formatMoney, formatNumber, titleCase, today } from '@/lib/utils'
 
-interface DraftLine extends DealLineRequest {
+interface DraftLine {
   key: string
+  productId: string
+  quantity: string
 }
 
-const emptyLine = (): DraftLine => ({
-  key: crypto.randomUUID(),
-  description: '',
-  quantity: '1',
-  unitPrice: '',
-  taxRate: '18',
-})
+const emptyLine = (): DraftLine => ({ key: crypto.randomUUID(), productId: '', quantity: '1' })
+
+/** A combo reports the bundles its scarcest component can build, so this covers both cases. */
+function availableQuantity(product: Product): number {
+  return Number(product.quantityOnHand ?? '0')
+}
+
+function outOfStock(product: Product): boolean {
+  // Services carry no stock by design and are always orderable.
+  if (!product.tracksStock && product.type === 'SERVICE') return false
+  return availableQuantity(product) <= 0
+}
+
+function optionLabel(product: Product): string {
+  const price = formatMoney(product.salesPrice)
+  if (product.type === 'SERVICE') return `${product.name} — ${price} · service`
+  const stock = `${formatNumber(product.quantityOnHand ?? '0', 0)} in stock`
+  return outOfStock(product)
+    ? `${product.name} — ${price} · out of stock`
+    : `${product.name} — ${price} · ${stock}`
+}
 
 /**
  * Customers buy through the portal namespace rather than the back office,
@@ -48,16 +64,30 @@ export function PortalBuyPage() {
     queryFn: () => portalApi.myOrders({ size: 50 }),
   })
 
+  const catalogue = useQuery({
+    queryKey: ['portal-supplier-catalogue', sellerId],
+    queryFn: () => portalApi.supplierCatalogue(Number(sellerId)),
+    enabled: open && Boolean(sellerId),
+  })
+
+  const catalogueById = useMemo(() => {
+    const map = new Map<string, Product>()
+    for (const p of catalogue.data ?? []) map.set(String(p.id), p)
+    return map
+  }, [catalogue.data])
+
   const totals = useMemo(() => {
     let untaxed = 0
     let tax = 0
     for (const l of lines) {
-      const base = (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0)
+      const product = catalogueById.get(l.productId)
+      if (!product) continue
+      const base = (Number(l.quantity) || 0) * (Number(product.salesPrice) || 0)
       untaxed += base
-      tax += (base * (Number(l.taxRate) || 0)) / 100
+      tax += (base * (Number(product.taxRate) || 0)) / 100
     }
     return { untaxed, tax, total: untaxed + tax }
-  }, [lines])
+  }, [lines, catalogueById])
 
   const reset = () => {
     setSellerId('')
@@ -67,20 +97,16 @@ export function PortalBuyPage() {
     setFormError(null)
   }
 
+  const validLines = lines.filter((l) => l.productId && Number(l.quantity) > 0)
+
   const create = useMutation({
     mutationFn: () =>
       portalApi.createOrder({
         sellerPartyId: Number(sellerId),
         dealDate,
         notes: notes.trim() || undefined,
-        lines: lines
-          .filter((l) => l.description.trim() && Number(l.quantity) > 0)
-          .map(({ description, quantity, unitPrice, taxRate }) => ({
-            description,
-            quantity,
-            unitPrice: unitPrice || '0',
-            taxRate: taxRate || '0',
-          })),
+        // Price and tax are deliberately omitted — the seller's catalogue is authoritative.
+        lines: validLines.map((l) => ({ productId: Number(l.productId), quantity: l.quantity })),
       }),
     onSuccess: (deal) => {
       qc.invalidateQueries({ queryKey: ['portal-orders'] })
@@ -116,8 +142,8 @@ export function PortalBuyPage() {
       setFormError('Choose who you want to buy from')
       return
     }
-    if (!lines.some((l) => l.description.trim() && Number(l.quantity) > 0)) {
-      setFormError('Add at least one item with a description and quantity')
+    if (validLines.length === 0) {
+      setFormError('Pick at least one item and give it a quantity')
       return
     }
     create.mutate()
@@ -127,6 +153,7 @@ export function PortalBuyPage() {
     setLines((cur) => cur.map((l) => (l.key === key ? { ...l, ...patch } : l)))
 
   const rows = orders.data?.content ?? []
+  const items = catalogue.data ?? []
 
   return (
     <>
@@ -211,13 +238,18 @@ export function PortalBuyPage() {
         onClose={() => setOpen(false)}
         size="lg"
         title="New purchase request"
-        description="Prices you enter are a proposal — the supplier confirms or declines them."
+        description="Pick items from the supplier's catalogue. They confirm the price before anything is owed."
         footer={
           <>
             <Button variant="outline" type="button" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" form="portal-rfq" loading={create.isPending}>
+            <Button
+              type="submit"
+              form="portal-rfq"
+              loading={create.isPending}
+              disabled={items.length === 0}
+            >
               Create request
             </Button>
           </>
@@ -226,7 +258,15 @@ export function PortalBuyPage() {
         <form id="portal-rfq" onSubmit={submit} className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <FormRow label="Buy from" required>
-              <Select value={sellerId} onChange={(e) => setSellerId(e.target.value)} required>
+              <Select
+                value={sellerId}
+                onChange={(e) => {
+                  setSellerId(e.target.value)
+                  // The old picks belong to the old catalogue, so start the lines again.
+                  setLines([emptyLine()])
+                }}
+                required
+              >
                 <option value="">Choose a supplier…</option>
                 {(suppliers.data ?? []).map((s) => (
                   <option key={s.id} value={s.id}>
@@ -246,81 +286,131 @@ export function PortalBuyPage() {
             </FormRow>
           </div>
 
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs font-medium tracking-wide text-muted-ink uppercase">Items</p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setLines((c) => [...c, emptyLine()])}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add item
-              </Button>
+          {!sellerId ? (
+            <div className="rounded-lg border border-dashed border-lilac-300 bg-lilac-50/50 px-4 py-8 text-center text-sm text-muted-ink">
+              Choose a supplier to see what they sell.
             </div>
-
-            <div className="space-y-2">
-              {lines.map((line) => (
-                <div
-                  key={line.key}
-                  className="grid grid-cols-12 items-end gap-2 rounded-lg border border-lilac-200 bg-lilac-50/40 p-2.5"
+          ) : catalogue.isLoading ? (
+            <div className="flex justify-center py-8">
+              <InlineLoader />
+            </div>
+          ) : catalogue.isError ? (
+            <ErrorState
+              message={errorMessage(catalogue.error)}
+              action={
+                <Button variant="outline" size="sm" onClick={() => void catalogue.refetch()}>
+                  Retry
+                </Button>
+              }
+            />
+          ) : items.length === 0 ? (
+            <EmptyState
+              icon={<Package className="h-6 w-6" />}
+              title="This supplier has published nothing yet"
+              description="There is no catalogue to order from. Pick a different supplier, or ask them to add products."
+            />
+          ) : (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-medium tracking-wide text-muted-ink uppercase">Items</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setLines((c) => [...c, emptyLine()])}
                 >
-                  <div className="col-span-12 sm:col-span-5">
-                    <label className="mb-1 block text-[10px] text-muted-ink uppercase">Item</label>
-                    <Input
-                      value={line.description}
-                      placeholder="What do you need?"
-                      onChange={(e) => updateLine(line.key, { description: e.target.value })}
-                    />
-                  </div>
-                  <div className="col-span-4 sm:col-span-2">
-                    <label className="mb-1 block text-[10px] text-muted-ink uppercase">Qty</label>
-                    <Input
-                      type="number"
-                      min="0.001"
-                      step="0.001"
-                      value={line.quantity}
-                      onChange={(e) => updateLine(line.key, { quantity: e.target.value })}
-                    />
-                  </div>
-                  <div className="col-span-4 sm:col-span-2">
-                    <label className="mb-1 block text-[10px] text-muted-ink uppercase">Price</label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={line.unitPrice}
-                      onChange={(e) => updateLine(line.key, { unitPrice: e.target.value })}
-                    />
-                  </div>
-                  <div className="col-span-3 sm:col-span-2">
-                    <label className="mb-1 block text-[10px] text-muted-ink uppercase">Tax %</label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      value={line.taxRate}
-                      onChange={(e) => updateLine(line.key, { taxRate: e.target.value })}
-                    />
-                  </div>
-                  <div className="col-span-1 flex justify-end">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Remove item"
-                      disabled={lines.length === 1}
-                      onClick={() => setLines((c) => c.filter((l) => l.key !== line.key))}
+                  <Plus className="h-3.5 w-3.5" />
+                  Add item
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                {lines.map((line) => {
+                  const product = catalogueById.get(line.productId)
+                  return (
+                    <div
+                      key={line.key}
+                      className="rounded-lg border border-lilac-200 bg-lilac-50/40 p-2.5"
                     >
-                      <Trash2 className="h-4 w-4 text-muted-ink" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                      <div className="grid grid-cols-12 items-end gap-2">
+                        <div className="col-span-12 sm:col-span-5">
+                          <label className="mb-1 block text-[10px] text-muted-ink uppercase">
+                            Item
+                          </label>
+                          <Select
+                            value={line.productId}
+                            onChange={(e) => updateLine(line.key, { productId: e.target.value })}
+                          >
+                            <option value="">Choose an item…</option>
+                            {items.map((p) => (
+                              <option key={p.id} value={p.id} disabled={outOfStock(p)}>
+                                {optionLabel(p)}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <div className="col-span-4 sm:col-span-2">
+                          <label className="mb-1 block text-[10px] text-muted-ink uppercase">
+                            Qty
+                          </label>
+                          <Input
+                            type="number"
+                            min="0.001"
+                            step="0.001"
+                            value={line.quantity}
+                            onChange={(e) => updateLine(line.key, { quantity: e.target.value })}
+                          />
+                        </div>
+                        <div className="col-span-4 sm:col-span-2">
+                          <label className="mb-1 block text-[10px] text-muted-ink uppercase">
+                            Price
+                          </label>
+                          <Input
+                            readOnly
+                            className="tabular bg-lilac-50 text-muted-ink"
+                            value={product ? formatMoney(product.salesPrice) : '—'}
+                          />
+                        </div>
+                        <div className="col-span-3 sm:col-span-2">
+                          <label className="mb-1 block text-[10px] text-muted-ink uppercase">
+                            Tax %
+                          </label>
+                          <Input
+                            readOnly
+                            className="tabular bg-lilac-50 text-muted-ink"
+                            value={product ? formatNumber(product.taxRate, 2) : '—'}
+                          />
+                        </div>
+                        <div className="col-span-1 flex justify-end">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Remove item"
+                            disabled={lines.length === 1}
+                            onClick={() => setLines((c) => c.filter((l) => l.key !== line.key))}
+                          >
+                            <Trash2 className="h-4 w-4 text-muted-ink" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {product?.type === 'COMBO' && (
+                        <p className="mt-2 text-xs text-muted-ink">
+                          <Badge tone="brand">Combo</Badge>{' '}
+                          {product.components.length === 0
+                            ? 'This bundle lists no components yet.'
+                            : `Each bundle contains ${product.components
+                                .map((c) => `${formatNumber(c.quantity, 0)} × ${c.componentName}`)
+                                .join(', ')}.`}
+                        </p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           <FormRow label="Notes">
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />

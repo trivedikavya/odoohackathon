@@ -8,7 +8,9 @@ export type AccessLevel = 'ADMIN' | 'ACCOUNTANT' | 'USER'
 
 export type AccountType = 'ASSET' | 'LIABILITY' | 'EQUITY' | 'INCOME' | 'EXPENSE'
 export type JournalType = 'SALES' | 'PURCHASE' | 'CASH' | 'BANK' | 'GENERAL'
-export type ProductType = 'GOODS' | 'SERVICE'
+export type ProductType = 'GOODS' | 'SERVICE' | 'COMBO'
+export type ContactRelationship = 'CUSTOMER' | 'VENDOR' | 'BOTH'
+export type StockDirection = 'IN' | 'OUT'
 export type SourceType = 'INVOICE' | 'BILL' | 'PAYMENT' | 'OPENING' | 'MANUAL'
 export type TaxTreatment = 'INTRA_STATE' | 'INTER_STATE' | 'UNSPECIFIED'
 export type AnalyticAccountType = 'PROJECT' | 'DEPARTMENT' | 'COST_CENTER'
@@ -112,7 +114,17 @@ export interface Contact {
   state?: string | null
   creditDays: number
   active: boolean
+  relationship: ContactRelationship
+  /** True when they keep books here, so deals with them mirror. */
   keepsBooks: boolean
+}
+
+export interface ProductComponent {
+  componentProductId: number
+  componentName: string
+  quantity: string
+  /** Live figure from the stock ledger. */
+  quantityOnHand: string
 }
 
 export interface Product {
@@ -125,6 +137,12 @@ export interface Product {
   taxRate: string
   category?: string | null
   active: boolean
+  /** False for services and combos - neither carries stock of its own. */
+  tracksStock: boolean
+  /** For a combo this is how many whole bundles its scarcest component can build. */
+  quantityOnHand: string | null
+  averageCost: string | null
+  components: ProductComponent[]
 }
 
 export interface Account {
@@ -279,11 +297,37 @@ export interface Payment {
 }
 
 export interface DealLineRequest {
-  description: string
+  /** The seller's catalogue item. Price and tax default from it when omitted. */
+  productId?: number | null
+  description?: string
   hsnCode?: string
   quantity: string
-  unitPrice: string
+  unitPrice?: string
   taxRate?: string
+}
+
+export interface CapitalRequest {
+  method: PaymentMethod
+  date: string
+  amount: string
+  note?: string
+}
+
+export interface ExpenseRequest {
+  expenseAccountId: number
+  method: PaymentMethod
+  date: string
+  amount: string
+  description: string
+  analyticAccountId?: number | null
+}
+
+export interface DirectTradeRequest {
+  counterpartyPartyId: number
+  date: string
+  dueDate?: string
+  notes?: string
+  lines: DealLineRequest[]
 }
 
 export interface CreateDealRequest {
@@ -365,10 +409,34 @@ export interface ProfitAndLoss {
   from: string
   to: string
   income: ReportSection
+  costOfSales: ReportSection
   expenses: ReportSection
   totalIncome: string
+  totalCostOfSales: string
+  grossProfit: string
+  /** Gross profit as a percentage of revenue; null when there was none. */
+  grossMarginPercent: string | null
   totalExpenses: string
   netProfit: string
+}
+
+export interface StockRow {
+  productId: number
+  productName: string
+  type: ProductType
+  quantityOnHand: string
+  averageCost: string
+  value: string
+}
+
+/** Stock on hand, cross-checked against the Inventory account. */
+export interface StockLedger {
+  asOf: string
+  rows: StockRow[]
+  totalValue: string
+  ledgerBalance: string
+  difference: string
+  reconciled: boolean
 }
 
 export interface TrialBalanceRow {

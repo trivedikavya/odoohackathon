@@ -14,6 +14,7 @@ import { DealsPage } from '@/pages/DealsPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
 import { AppErrorBoundary, NotFoundPage } from '@/pages/ErrorPages'
 import { LedgerPage } from '@/pages/LedgerPage'
+import { OperationsPage } from '@/pages/OperationsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationPage } from '@/pages/OrganisationPage'
 import { PaymentsPage } from '@/pages/PaymentsPage'
@@ -29,6 +30,7 @@ import { BalanceSheetPage } from '@/pages/reports/BalanceSheetPage'
 import { BudgetReportPage } from '@/pages/reports/BudgetReportPage'
 import { ProfitAndLossPage } from '@/pages/reports/ProfitAndLossPage'
 import { ReconciliationPage } from '@/pages/reports/ReconciliationPage'
+import { StockLedgerPage } from '@/pages/reports/StockLedgerPage'
 import { TrialBalancePage } from '@/pages/reports/TrialBalancePage'
 
 const queryClient = new QueryClient({
@@ -77,6 +79,7 @@ export default function App() {
                     <Route path="contacts" element={<ContactsPage />} />
                     <Route path="products" element={<ProductsPage />} />
                     <Route path="ledger" element={<LedgerPage />} />
+                    <Route path="operations" element={<OperationsPage />} />
                     <Route path="accounts" element={<AccountsPage />} />
                     <Route path="analytic-accounts" element={<AnalyticAccountsPage />} />
                     <Route path="budgets" element={<BudgetsPage />} />
@@ -86,6 +89,7 @@ export default function App() {
                     <Route path="reports/aging" element={<AgingReportPage />} />
                     <Route path="reports/reconciliation" element={<ReconciliationPage />} />
                     <Route path="reports/budget" element={<BudgetReportPage />} />
+                    <Route path="reports/stock-ledger" element={<StockLedgerPage />} />
 
                     {/* Admin-only. The server blocks these endpoints too. */}
                     <Route element={<ProtectedRoute levels={['ADMIN']} />}>

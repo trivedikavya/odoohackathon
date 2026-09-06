@@ -12,10 +12,12 @@ import { EmptyState, ErrorState, InlineLoader, PageLoader } from '@/components/u
 import { useToast } from '@/components/ui/Toast'
 import { masterApi } from '@/api/endpoints'
 import { errorMessage } from '@/api/client'
-import type { PartyType } from '@/api/types'
+import type { ContactRelationship, PartyType } from '@/api/types'
 import { titleCase } from '@/lib/utils'
 
 const PARTY_TYPES: PartyType[] = ['SELLER', 'VENDOR', 'CUSTOMER']
+
+const RELATIONSHIPS: ContactRelationship[] = ['CUSTOMER', 'VENDOR', 'BOTH']
 
 const typeTones: Record<PartyType, 'brand' | 'info' | 'warning'> = {
   SELLER: 'brand',
@@ -23,9 +25,16 @@ const typeTones: Record<PartyType, 'brand' | 'info' | 'warning'> = {
   CUSTOMER: 'info',
 }
 
+const relationshipTones: Record<ContactRelationship, 'brand' | 'info' | 'warning'> = {
+  CUSTOMER: 'info',
+  VENDOR: 'warning',
+  BOTH: 'brand',
+}
+
 interface OfflineForm {
   name: string
   type: PartyType
+  relationship: ContactRelationship
   email: string
   phone: string
   gstin: string
@@ -39,6 +48,7 @@ interface OfflineForm {
 const EMPTY_OFFLINE: OfflineForm = {
   name: '',
   type: 'CUSTOMER',
+  relationship: 'CUSTOMER',
   email: '',
   phone: '',
   gstin: '',
@@ -80,6 +90,7 @@ export function ContactsPage() {
       masterApi.createContact({
         name: form.name.trim(),
         type: form.type,
+        relationship: form.relationship,
         email: form.email.trim() || undefined,
         phone: form.phone.trim() || undefined,
         gstin: form.gstin.trim() || undefined,
@@ -145,7 +156,7 @@ export function ContactsPage() {
     <div>
       <PageHeader
         title="Contacts"
-        description="Everyone you trade with. Counterparties marked “On platform” keep their own books, so any deal you agree with them is mirrored into their ledger automatically."
+        description="Everyone you trade with. Counterparties marked “On platform” keep their own books, so any deal you agree with them is mirrored into their ledger automatically. The relationship label is only there for filtering — the direction of a trade is decided deal by deal, so a contact marked Customer can still supply you."
         action={
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => setLinkOpen(true)}>
@@ -215,6 +226,7 @@ export function ContactsPage() {
               <tr>
                 <TH>Name</TH>
                 <TH className="w-28">Type</TH>
+                <TH className="w-32">Relationship</TH>
                 <TH>Email</TH>
                 <TH className="w-36">Phone</TH>
                 <TH className="w-44">City / State</TH>
@@ -225,7 +237,7 @@ export function ContactsPage() {
             </THead>
             <tbody>
               {contacts.length === 0 ? (
-                <EmptyRow colSpan={8}>
+                <EmptyRow colSpan={9}>
                   {search ? 'No contacts match that search.' : 'No contacts yet.'}
                 </EmptyRow>
               ) : (
@@ -241,6 +253,11 @@ export function ContactsPage() {
                     </TD>
                     <TD>
                       <Badge tone={typeTones[contact.type]}>{titleCase(contact.type)}</Badge>
+                    </TD>
+                    <TD>
+                      <Badge tone={relationshipTones[contact.relationship]}>
+                        {titleCase(contact.relationship)}
+                      </Badge>
                     </TD>
                     <TD>{contact.email ?? <span className="text-muted-ink">—</span>}</TD>
                     <TD>{contact.phone ?? <span className="text-muted-ink">—</span>}</TD>
@@ -323,6 +340,20 @@ export function ContactsPage() {
               ))}
             </Select>
           </FormRow>
+          <FormRow label="Relationship" required>
+            <Select
+              value={form.relationship}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, relationship: e.target.value as ContactRelationship }))
+              }
+            >
+              {RELATIONSHIPS.map((r) => (
+                <option key={r} value={r}>
+                  {titleCase(r)}
+                </option>
+              ))}
+            </Select>
+          </FormRow>
           <FormRow label="Credit days" error={errors.creditDays}>
             <Input
               type="number"
@@ -330,6 +361,10 @@ export function ContactsPage() {
               onChange={(e) => setForm((f) => ({ ...f, creditDays: e.target.value }))}
             />
           </FormRow>
+          <p className="text-xs text-muted-ink sm:col-span-2">
+            The relationship is a filing label, not a rule. Whether a deal is a purchase or a sale
+            is decided when you raise it, so a contact marked Customer can still supply you.
+          </p>
           <FormRow label="Email">
             <Input
               type="email"
